@@ -408,33 +408,35 @@ class MLService:
             }
 
     def _generate_and_save_embeddings(self, images: List[np.ndarray], labels: List[int]) -> None:
-        """
-        Genera y guarda embeddings en formato JSON
-        """
         embeddings_data = []
 
         for image, label in zip(images, labels):
-            # Extraer características con ambos algoritmos
-            eigen_features = self.eigenfaces_service.extract_features(image)
-            lbp_features = self.lbp_service.extract_lbp_features(image)
+            try:
+                # Extraer características con ambos algoritmos
+                eigen_features = self.eigenfaces_service.extract_features(image)
+                lbp_features = self.lbp_service.extract_lbp_features(image)
 
-            embedding = {
-                "person_id": label,
-                "eigenfaces_embedding": eigen_features.tolist(),
-                "lbp_embedding": lbp_features.tolist(),
-                "timestamp": datetime.now().isoformat(),
-                "algorithm_version": self.model_version
-            }
+                embedding = {
+                    "person_id": label,
+                    "eigenfaces_embedding": eigen_features.tolist(),
+                    "lbp_embedding": lbp_features.tolist(),
+                    "timestamp": datetime.now().isoformat(),
+                    "algorithm_version": self.model_version
+                }
 
-            embeddings_data.append(embedding)
+                embeddings_data.append(embedding)
 
-        # Guardar en archivo JSON
-        embeddings_file = os.path.join(self.storage_path, f"embeddings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            except Exception as e:
+                print(f"⚠️ Error generando embedding para persona {label}: {e}")
+                continue  # Saltar este embedding pero continuar
 
-        with open(embeddings_file, 'w') as f:
-            json.dump(embeddings_data, f, indent=2)
-
-        print(f"💾 Embeddings guardados en: {embeddings_file}")
+        # Guardar solo los embeddings exitosos
+        if embeddings_data:
+            embeddings_file = os.path.join(self.storage_path,
+                                           f"embeddings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            with open(embeddings_file, 'w') as f:
+                json.dump(embeddings_data, f, indent=2)
+            print(f"💾 {len(embeddings_data)} embeddings guardados en: {embeddings_file}")
 
     def get_system_info(self) -> Dict[str, Any]:
         """

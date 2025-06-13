@@ -26,7 +26,7 @@ class EigenfacesService:
         """
         self.n_components = n_components
         self.image_size = image_size
-        self.pca = PCA(n_components=n_components, whiten=True)
+        self.pca = None
         self.scaler = StandardScaler()
 
         # Datos de entrenamiento
@@ -43,19 +43,16 @@ class EigenfacesService:
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
         Preprocesa una imagen para el algoritmo Eigenfaces
-
-        Args:
-            image: Imagen en formato numpy array
-
-        Returns:
-            Imagen preprocesada y normalizada
+        IMPORTANTE: Debe ser consistente entre entrenamiento y reconocimiento
         """
         # Convertir a escala de grises si es necesario
         if len(image.shape) == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Redimensionar a tamaño estándar
-        image = cv2.resize(image, self.image_size)
+        # CRÍTICO: Redimensionar SIEMPRE al tamaño específico
+        image = cv2.resize(image, self.image_size, interpolation=cv2.INTER_LANCZOS4)
+
+        print(f"🔧 Imagen redimensionada a: {image.shape} (esperado: {self.image_size})")
 
         # Aplicar filtro gaussiano para reducir ruido
         image = cv2.GaussianBlur(image, (5, 5), 0)
@@ -71,18 +68,29 @@ class EigenfacesService:
     def extract_features(self, image: np.ndarray) -> np.ndarray:
         """
         Extrae características usando Eigenfaces
-
-        Args:
-            image: Imagen preprocesada
-
-        Returns:
-            Vector de características (embedding)
         """
         if not self.is_trained:
             raise ValueError("El modelo no ha sido entrenado. Ejecute train() primero.")
 
+        # Preprocesar imagen (garantiza dimensiones correctas)
+        processed_image = self.preprocess_image(image)
+
+        print(f"🔍 Imagen procesada shape: {processed_image.shape}")
+        print(f"🔍 Tamaño esperado: {self.image_size}")
+
         # Aplanar la imagen
-        image_vector = image.flatten()
+        image_vector = processed_image.flatten()
+
+        print(f"🔍 Vector aplanado shape: {image_vector.shape}")
+        print(f"🔍 Mean face shape: {self.mean_face.shape}")
+
+        # Verificar dimensiones antes de operar
+        if image_vector.shape[0] != self.mean_face.shape[0]:
+            raise ValueError(
+                f"Dimensión incorrecta: imagen={image_vector.shape[0]}, "
+                f"mean_face={self.mean_face.shape[0]}. "
+                f"La imagen debe ser redimensionada a {self.image_size}"
+            )
 
         # Centrar la imagen restando la cara promedio
         centered_image = image_vector - self.mean_face
@@ -102,28 +110,38 @@ class EigenfacesService:
         """
         print(f"🎓 Iniciando entrenamiento Eigenfaces con {len(images)} imágenes...")
 
-        # Preprocesar todas las imágenes
+        # PASO 1: Preprocesar todas las imágenes PRIMERO
         processed_images = []
         for img in images:
             processed_img = self.preprocess_image(img)
             processed_images.append(processed_img.flatten())
 
-        # Convertir a matriz numpy
+        # PASO 2: Convertir a matriz numpy
         X = np.array(processed_images)
 
-        # Calcular la cara promedio
+        # PASO 3: AHORA ajustar n_components (después de crear X)
+        max_components = min(len(images), X.shape[1]) - 1
+        actual_components = min(self.n_components, max_components)
+
+        print(f"📊 Ajustando componentes: {self.n_components} → {actual_components}")
+        print(f"📈 Datos disponibles: {len(images)} imágenes, {X.shape[1]} características")
+
+        # PASO 4: Inicializar PCA con componentes ajustados
+        self.pca = PCA(n_components=actual_components, whiten=True)
+
+        # PASO 5: Calcular la cara promedio
         self.mean_face = np.mean(X, axis=0)
 
-        # Centrar los datos
+        # PASO 6: Centrar los datos
         X_centered = X - self.mean_face
 
-        # Aplicar PCA
+        # PASO 7: Aplicar PCA
         self.pca.fit(X_centered)
 
-        # Guardar eigenfaces
+        # PASO 8: Guardar eigenfaces
         self.eigenfaces = self.pca.components_
 
-        # Generar embeddings para todas las imágenes de entrenamiento
+        # PASO 9: Generar embeddings para todas las imágenes de entrenamiento
         self.trained_embeddings = []
         self.trained_labels = []
 
@@ -136,6 +154,7 @@ class EigenfacesService:
 
         print(f"✅ Entrenamiento completado. Eigenfaces generados: {len(self.eigenfaces)}")
         print(f"📊 Varianza explicada: {sum(self.pca.explained_variance_ratio_):.2%}")
+        print(f"🔢 Embeddings creados: {len(self.trained_embeddings)}")
 
     def add_new_person(self, images: List[np.ndarray], person_id: int) -> None:
         """

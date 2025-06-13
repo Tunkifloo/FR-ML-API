@@ -10,7 +10,7 @@ from datetime import datetime
 from config.database import init_database, create_database_if_not_exists
 
 # Importar routers
-from routers import users, recognition
+from routers import users, recognition, face_training
 
 # Importar servicios
 from services.ml_service import MLService
@@ -80,6 +80,7 @@ if os.path.exists("storage/images"):
 # Incluir routers
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(recognition.router, prefix="/api/v1")
+app.include_router(face_training.router, prefix="/api/v1")
 
 # Inicializar servicios
 ml_service = MLService()
