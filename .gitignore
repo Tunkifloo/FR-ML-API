@@ -194,5 +194,10 @@ cython_debug/
 .cursorindexingignore
 
 .idea
+# Entornos de configuración
+.env
 .env.development
 .env.production
+
+# Recursos del sistema
+storage
