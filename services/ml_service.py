@@ -33,6 +33,11 @@ class MLService:
         self.model_version = "1.0"
         self.training_history = []
 
+        # ⚡ AÑADIR ESTAS LÍNEAS NUEVAS ⚡
+        self.auto_training_enabled = True
+        self.min_persons_for_training = 2  # Mínimo 2 personas para entrenar
+        self.pending_persons = {}  # Personas pendientes de entrenamiento
+
         # Configuración de combinación
         self.combination_method = "weighted_average"  # weighted_average, voting, cascade
         self.eigenfaces_weight = 0.6
@@ -261,7 +266,7 @@ class MLService:
 
     def add_new_person(self, person_id: int, images: List[np.ndarray]) -> Dict[str, Any]:
         """
-        Añade una nueva persona al sistema (entrenamiento incremental)
+        Añade una nueva persona al sistema con entrenamiento automático inteligente
 
         Args:
             person_id: ID de la nueva persona
@@ -282,25 +287,148 @@ class MLService:
         if not processed_images:
             raise ValueError("No se pudieron procesar las imágenes proporcionadas")
 
-        # Añadir a ambos modelos
-        self.eigenfaces_service.add_new_person(processed_images, person_id)
-        self.lbp_service.add_new_person(processed_images, person_id)
+        # LÓGICA MEJORADA: Determinar acción según estado del modelo
+        if not self.is_trained:
+            print("🔄 Modelo no entrenado - Acumulando datos para entrenamiento inicial")
 
-        # Generar embeddings para la nueva persona
-        self._generate_and_save_embeddings(processed_images, [person_id] * len(processed_images))
+            # Añadir a pendientes
+            self.pending_persons[person_id] = processed_images
 
-        # Guardar modelos actualizados
-        self.eigenfaces_service.save_model()
-        self.lbp_service.save_model()
+            # Verificar si tenemos suficientes personas para entrenar
+            if len(self.pending_persons) >= self.min_persons_for_training:
+                print(f"🚀 Iniciando entrenamiento automático con {len(self.pending_persons)} personas")
+                return self._trigger_auto_training()
+            else:
+                print(
+                    f"⏳ Esperando más datos. Personas actuales: {len(self.pending_persons)}/{self.min_persons_for_training}")
+                return {
+                    "person_id": person_id,
+                    "images_processed": len(processed_images),
+                    "status": "pending_training",
+                    "message": f"Datos guardados. Se necesitan {self.min_persons_for_training - len(self.pending_persons)} personas más para entrenar",
+                    "timestamp": datetime.now().isoformat()
+                }
+        else:
+            print("🔄 Modelo ya entrenado - Entrenamiento incremental")
 
-        stats = {
-            "person_id": person_id,
-            "images_processed": len(processed_images),
-            "timestamp": datetime.now().isoformat()
-        }
+            # Entrenamiento incremental
+            self.eigenfaces_service.add_new_person(processed_images, person_id)
+            self.lbp_service.add_new_person(processed_images, person_id)
 
-        print(f"✅ Persona {person_id} añadida con {len(processed_images)} imágenes")
-        return stats
+            # Guardar modelos actualizados
+            self.eigenfaces_service.save_model()
+            self.lbp_service.save_model()
+
+            # Generar embeddings
+            self._generate_and_save_embeddings(processed_images, [person_id] * len(processed_images))
+
+            # Guardar características en BD
+            try:
+                self._save_incremental_characteristics({person_id: images})  # Usar imágenes originales
+            except Exception as e:
+                print(f"⚠️ Error guardando características en BD: {e}")
+
+            return {
+                "person_id": person_id,
+                "images_processed": len(processed_images),
+                "status": "added_incremental",
+                "message": "Persona añadida al modelo existente",
+                "timestamp": datetime.now().isoformat()
+            }
+
+    def _trigger_auto_training(self) -> Dict[str, Any]:
+        """
+        Dispara el entrenamiento automático con los datos pendientes
+        """
+        try:
+            print("🎓 Iniciando entrenamiento automático...")
+
+            # Usar datos pendientes para entrenamiento inicial
+            training_stats = self.train_models(self.pending_persons)
+
+            # Limpiar pendientes
+            self.pending_persons.clear()
+
+            training_stats.update({
+                "status": "auto_trained",
+                "message": "Modelo entrenado automáticamente",
+                "auto_training": True
+            })
+
+            return training_stats
+
+        except Exception as e:
+            print(f"❌ Error en entrenamiento automático: {e}")
+            return {
+                "status": "training_failed",
+                "error": str(e),
+                "message": "Error en entrenamiento automático",
+                "timestamp": datetime.now().isoformat()
+            }
+
+    def _save_incremental_characteristics(self, images_by_person: Dict[int, List[np.ndarray]]):
+        """
+        Guarda características para entrenamiento incremental
+        """
+        from config.database import SessionLocal
+        from models.database_models import CaracteristicasFaciales, ImagenFacial
+
+        print("💾 Guardando características incrementales en BD")
+
+        db = SessionLocal()
+        try:
+            for person_id, images in images_by_person.items():
+                # Obtener las imágenes más recientes de la BD
+                db_images = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == person_id,
+                    ImagenFacial.activa == True
+                ).order_by(ImagenFacial.fecha_subida.desc()).limit(len(images)).all()
+
+                if not db_images:
+                    continue
+
+                for i, (original_image, db_image) in enumerate(zip(images, db_images)):
+                    try:
+                        # Extraer características usando imágenes originales
+                        eigenfaces_features = self.eigenfaces_service.extract_features(original_image)
+                        lbp_features = self.lbp_service.extract_lbp_features(original_image)
+
+                        # Verificar si ya existe
+                        existing = db.query(CaracteristicasFaciales).filter(
+                            CaracteristicasFaciales.imagen_id == db_image.id
+                        ).first()
+
+                        if existing:
+                            # Actualizar existente
+                            existing.eigenfaces_vector = eigenfaces_features.tolist()
+                            existing.lbp_histogram = lbp_features.tolist()
+                            existing.fecha_procesamiento = datetime.now()
+                            print(f"   🔄 Características actualizadas para imagen {db_image.id}")
+                        else:
+                            # Crear nuevo registro
+                            caracteristicas = CaracteristicasFaciales(
+                                usuario_id=person_id,
+                                imagen_id=db_image.id,
+                                eigenfaces_vector=eigenfaces_features.tolist(),
+                                lbp_histogram=lbp_features.tolist(),
+                                algoritmo_version="2.0",
+                                calidad_deteccion=85
+                            )
+                            db.add(caracteristicas)
+                            print(f"   ✅ Características creadas para imagen {db_image.id}")
+
+                    except Exception as e:
+                        print(f"   ❌ Error procesando imagen {db_image.id}: {e}")
+                        continue
+
+            db.commit()
+            print("✅ Características incrementales guardadas exitosamente")
+
+        except Exception as e:
+            print(f"❌ Error crítico guardando características: {e}")
+            db.rollback()
+        finally:
+            db.close()
 
     def recognize_face(self, image: np.ndarray, method: str = "hybrid") -> Dict[str, Any]:
         """
@@ -664,3 +792,120 @@ class MLService:
             results[method]["average_confidence"] = avg_confidence
 
         return results
+
+    def check_training_requirements(self) -> Dict[str, Any]:
+        """
+        Verifica los requisitos para entrenamiento
+        """
+        from config.database import SessionLocal
+        from models.database_models import Usuario, ImagenFacial
+
+        db = SessionLocal()
+        try:
+            # Contar usuarios con imágenes
+            usuarios_con_imagenes = db.query(Usuario).filter(
+                Usuario.activo == True
+            ).join(ImagenFacial).filter(
+                ImagenFacial.activa == True
+            ).distinct().count()
+
+            total_imagenes = db.query(ImagenFacial).filter(
+                ImagenFacial.activa == True
+            ).count()
+
+            requirements = {
+                "can_train": usuarios_con_imagenes >= self.min_persons_for_training,
+                "users_with_images": usuarios_con_imagenes,
+                "total_images": total_imagenes,
+                "min_required": self.min_persons_for_training,
+                "pending_users": len(self.pending_persons),
+                "model_trained": self.is_trained,
+                "auto_training_enabled": self.auto_training_enabled
+            }
+
+            return requirements
+
+        finally:
+            db.close()
+
+    def force_retrain_from_database(self) -> Dict[str, Any]:
+        """
+        Fuerza un reentrenamiento completo desde la base de datos
+        """
+        from config.database import SessionLocal
+        from models.database_models import Usuario, ImagenFacial
+        import cv2
+
+        print("🔄 Forzando reentrenamiento desde base de datos...")
+
+        db = SessionLocal()
+        try:
+            # Obtener todos los usuarios activos con imágenes
+            usuarios = db.query(Usuario).filter(Usuario.activo == True).all()
+            images_by_person = {}
+
+            for usuario in usuarios:
+                imagenes = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == usuario.id,
+                    ImagenFacial.activa == True
+                ).all()
+
+                if imagenes:
+                    user_images = []
+                    for imagen in imagenes:
+                        if os.path.exists(imagen.ruta_archivo):
+                            img = cv2.imread(imagen.ruta_archivo)
+                            if img is not None:
+                                user_images.append(img)
+
+                    if user_images:
+                        images_by_person[usuario.id] = user_images
+
+            if len(images_by_person) < self.min_persons_for_training:
+                return {
+                    "success": False,
+                    "error": f"Insuficientes usuarios con imágenes. Requeridos: {self.min_persons_for_training}, Disponibles: {len(images_by_person)}"
+                }
+
+            # Resetear estado
+            self.is_trained = False
+            self.pending_persons.clear()
+
+            # Entrenar modelo
+            training_stats = self.train_models(images_by_person)
+            training_stats["forced_retrain"] = True
+            training_stats["success"] = True
+
+            return training_stats
+
+        finally:
+            db.close()
+
+    def get_training_status(self) -> Dict[str, Any]:
+        """
+        Obtiene el estado actual del entrenamiento
+        """
+        requirements = self.check_training_requirements()
+
+        status = {
+            "model_trained": self.is_trained,
+            "auto_training_enabled": self.auto_training_enabled,
+            "training_requirements": requirements,
+            "system_ready": self.is_trained or requirements["can_train"],
+            "recommendation": self._get_training_recommendation(requirements)
+        }
+
+        return status
+
+    def _get_training_recommendation(self, requirements: Dict[str, Any]) -> str:
+        """
+        Obtiene recomendación sobre el entrenamiento
+        """
+        if self.is_trained:
+            return "✅ Modelo entrenado y listo para uso"
+        elif requirements["can_train"]:
+            return "🎓 Datos suficientes - Se puede entrenar automáticamente"
+        else:
+            needed = requirements["min_required"] - requirements["users_with_images"]
+            return f"⏳ Se necesitan {needed} usuarios más con imágenes para entrenar"
+

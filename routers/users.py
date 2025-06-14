@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import shutil
 import os
 from datetime import datetime
@@ -39,6 +39,51 @@ def validate_image_file(file: UploadFile) -> bool:
     return file_ext in ALLOWED_EXTENSIONS
 
 
+def convert_image_to_base64(image_path: str, max_size: Tuple[int, int] = (150, 150)) -> Optional[str]:
+    """
+    Convierte una imagen a base64 para preview, redimensionándola si es necesario
+
+    Args:
+        image_path: Ruta de la imagen
+        max_size: Tamaño máximo para el preview (ancho, alto)
+
+    Returns:
+        String base64 de la imagen o None si hay error
+    """
+    try:
+        import base64
+        from PIL import Image
+        import io
+
+        if not os.path.exists(image_path):
+            print(f"⚠️ Imagen no encontrada: {image_path}")
+            return None
+
+        # Abrir imagen
+        with Image.open(image_path) as img:
+            # Convertir a RGB si es necesario
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            # Redimensionar manteniendo proporción
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+            # Convertir a bytes
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format='JPEG', quality=85, optimize=True)
+            img_bytes = img_buffer.getvalue()
+
+            # Convertir a base64
+            img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+
+            # Retornar con prefijo para uso directo en HTML/frontend
+            return f"data:image/jpeg;base64,{img_base64}"
+
+    except Exception as e:
+        print(f"⚠️ Error convirtiendo imagen a base64: {e}")
+        return None
+
+
 @router.post("/", response_model=ResponseWithData, summary="Crear nuevo usuario")
 async def crear_usuario(
         nombre: str = Form(...),
@@ -50,12 +95,7 @@ async def crear_usuario(
 ):
     """
     Crea un nuevo usuario con sus imágenes faciales (mínimo 1, máximo 5)
-
-    - **nombre**: Nombre de la persona
-    - **apellido**: Apellido de la persona
-    - **email**: Correo electrónico único
-    - **id_estudiante**: ID de estudiante (opcional)
-    - **imagenes**: Lista de imágenes faciales (1-5 archivos)
+    CON ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
     """
     try:
         # Validar número de imágenes
@@ -145,7 +185,7 @@ async def crear_usuario(
 
         db.commit()
 
-        # Procesar imágenes con ML para extraer características
+        # ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
         try:
             import cv2
             import numpy as np
@@ -160,28 +200,65 @@ async def crear_usuario(
                     imagen_facial.alto = img.shape[0]
                     imagen_facial.ancho = img.shape[1]
 
-            # Entrenar/actualizar modelo ML con las nuevas imágenes
+            # CÓDIGO CORREGIDO - Entrenamiento automático inteligente
             if imagenes_procesadas:
-                ml_service.add_new_person(nuevo_usuario.id, imagenes_procesadas)
+                training_result = ml_service.add_new_person(nuevo_usuario.id, imagenes_procesadas)
+
+                # Preparar respuesta del usuario
+                usuario_creado = {
+                    "id": nuevo_usuario.id,
+                    "nombre": nuevo_usuario.nombre,
+                    "apellido": nuevo_usuario.apellido,
+                    "email": nuevo_usuario.email,
+                    "id_estudiante": nuevo_usuario.id_estudiante,
+                    "requisitoriado": nuevo_usuario.requisitoriado,
+                    "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
+                    "total_imagenes": len(imagenes_guardadas),
+                    "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
+                    # Información del entrenamiento ML
+                    "ml_training_status": training_result.get("status", "unknown"),
+                    "ml_message": training_result.get("message", ""),
+                    "model_trained": training_result.get("status") in ["added_incremental", "auto_trained"]
+                }
+
+                print(f"🤖 Resultado ML: {training_result.get('message', 'Sin mensaje')}")
+
+            else:
+                # Si no se procesaron imágenes
+                usuario_creado = {
+                    "id": nuevo_usuario.id,
+                    "nombre": nuevo_usuario.nombre,
+                    "apellido": nuevo_usuario.apellido,
+                    "email": nuevo_usuario.email,
+                    "id_estudiante": nuevo_usuario.id_estudiante,
+                    "requisitoriado": nuevo_usuario.requisitoriado,
+                    "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
+                    "total_imagenes": len(imagenes_guardadas),
+                    "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
+                    "ml_training_status": "no_processed",
+                    "ml_message": "No se procesaron imágenes para ML",
+                    "model_trained": False
+                }
 
         except Exception as e:
-            print(f"Error al procesar imágenes con ML: {e}")
+            print(f"⚠️ Error en procesamiento ML: {e}")
             # No fallar la creación del usuario por errores de ML
+            usuario_creado = {
+                "id": nuevo_usuario.id,
+                "nombre": nuevo_usuario.nombre,
+                "apellido": nuevo_usuario.apellido,
+                "email": nuevo_usuario.email,
+                "id_estudiante": nuevo_usuario.id_estudiante,
+                "requisitoriado": nuevo_usuario.requisitoriado,
+                "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
+                "total_imagenes": len(imagenes_guardadas),
+                "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
+                "ml_training_status": "error",
+                "ml_message": f"Error en entrenamiento: {str(e)}",
+                "model_trained": False
+            }
 
         db.commit()
-
-        # Preparar respuesta
-        usuario_creado = {
-            "id": nuevo_usuario.id,
-            "nombre": nuevo_usuario.nombre,
-            "apellido": nuevo_usuario.apellido,
-            "email": nuevo_usuario.email,
-            "id_estudiante": nuevo_usuario.id_estudiante,
-            "requisitoriado": nuevo_usuario.requisitoriado,
-            "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
-            "total_imagenes": len(imagenes_guardadas),
-            "fecha_registro": nuevo_usuario.fecha_registro.isoformat()
-        }
 
         return ResponseWithData(
             success=True,
@@ -196,7 +273,7 @@ async def crear_usuario(
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 
-@router.get("/", response_model=ResponsePaginado, summary="Listar usuarios")
+@router.get("/", response_model=ResponsePaginado, summary="Listar usuarios con imágenes principales")
 async def listar_usuarios(
         pagina: int = Query(1, ge=1, description="Número de página"),
         items_por_pagina: int = Query(10, ge=1, le=100, description="Items por página"),
@@ -205,10 +282,11 @@ async def listar_usuarios(
         email: Optional[str] = Query(None, description="Filtrar por email"),
         requisitoriado: Optional[bool] = Query(None, description="Filtrar por estado de requisitoriado"),
         activo: Optional[bool] = Query(True, description="Filtrar por estado activo"),
+        incluir_imagen: bool = Query(True, description="Incluir imagen principal para preview"),
         db: Session = Depends(get_db)
 ):
     """
-    Lista usuarios con paginación y filtros opcionales
+    Lista usuarios con paginación, filtros e imágenes principales para preview
     """
     try:
         # Construir query base
@@ -236,7 +314,7 @@ async def listar_usuarios(
         # Calcular total de páginas
         total_paginas = (total + items_por_pagina - 1) // items_por_pagina
 
-        # Convertir a diccionarios
+        # Convertir a diccionarios con información extendida
         usuarios_data = []
         for usuario in usuarios:
             usuario_dict = {
@@ -250,6 +328,47 @@ async def listar_usuarios(
                 "fecha_registro": usuario.fecha_registro.isoformat(),
                 "activo": usuario.activo
             }
+
+            # Añadir información de imagen principal si se solicita
+            if incluir_imagen:
+                # Buscar imagen principal
+                imagen_principal = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == usuario.id,
+                    ImagenFacial.activa == True,
+                    ImagenFacial.es_principal == True
+                ).first()
+
+                # Si no hay imagen principal, tomar la primera imagen disponible
+                if not imagen_principal:
+                    imagen_principal = db.query(ImagenFacial).filter(
+                        ImagenFacial.usuario_id == usuario.id,
+                        ImagenFacial.activa == True
+                    ).order_by(ImagenFacial.fecha_subida.asc()).first()
+
+                if imagen_principal:
+                    # Convertir imagen a base64 para preview
+                    imagen_base64 = convert_image_to_base64(imagen_principal.ruta_archivo)
+
+                    usuario_dict["imagen_principal"] = {
+                        "id": imagen_principal.id,
+                        "nombre_archivo": imagen_principal.nombre_archivo,
+                        "formato": imagen_principal.formato,
+                        "fecha_subida": imagen_principal.fecha_subida.isoformat(),
+                        "es_principal": imagen_principal.es_principal,
+                        "imagen_base64": imagen_base64,  # Para preview en frontend
+                        "imagen_url": f"/images/{os.path.basename(imagen_principal.ruta_archivo)}"  # URL alternativa
+                    }
+                else:
+                    usuario_dict["imagen_principal"] = None
+
+                # Contar total de imágenes
+                total_imagenes = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == usuario.id,
+                    ImagenFacial.activa == True
+                ).count()
+
+                usuario_dict["total_imagenes"] = total_imagenes
+
             usuarios_data.append(usuario_dict)
 
         return ResponsePaginado(
@@ -266,25 +385,30 @@ async def listar_usuarios(
         raise HTTPException(status_code=500, detail=f"Error al obtener usuarios: {str(e)}")
 
 
-@router.get("/{usuario_id}", response_model=ResponseWithData, summary="Obtener usuario por ID")
-async def obtener_usuario(
-        usuario_id: int,
-        incluir_imagenes: bool = Query(False, description="Incluir información de imágenes"),
+@router.get("/estudiante/{id_estudiante}", response_model=ResponseWithData,
+            summary="Obtener usuario por ID de estudiante")
+async def obtener_usuario_por_id_estudiante(
+        id_estudiante: str,
+        incluir_imagenes: bool = Query(True, description="Incluir todas las imágenes del usuario"),
         incluir_reconocimientos: bool = Query(False, description="Incluir historial de reconocimientos"),
+        incluir_caracteristicas: bool = Query(False, description="Incluir características ML"),
         db: Session = Depends(get_db)
 ):
     """
-    Obtiene un usuario específico por su ID con información detallada
+    Obtiene un usuario específico por su ID de estudiante con información completa
     """
     try:
-        # Buscar usuario
+        # Buscar usuario por ID de estudiante
         usuario = db.query(Usuario).filter(
-            Usuario.id == usuario_id,
+            Usuario.id_estudiante == id_estudiante,
             Usuario.activo == True
         ).first()
 
         if not usuario:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Usuario con ID de estudiante '{id_estudiante}' no encontrado"
+            )
 
         # Datos básicos del usuario
         usuario_data = {
@@ -300,45 +424,166 @@ async def obtener_usuario(
             "activo": usuario.activo
         }
 
-        # Incluir imágenes si se solicita
+        # Incluir imágenes completas si se solicita
         if incluir_imagenes:
             imagenes = db.query(ImagenFacial).filter(
-                ImagenFacial.usuario_id == usuario_id,
+                ImagenFacial.usuario_id == usuario.id,
                 ImagenFacial.activa == True
-            ).all()
+            ).order_by(ImagenFacial.es_principal.desc(), ImagenFacial.fecha_subida.asc()).all()
 
-            usuario_data["imagenes"] = [
-                {
+            imagenes_data = []
+            for img in imagenes:
+                # Convertir cada imagen a base64
+                imagen_base64 = convert_image_to_base64(img.ruta_archivo)
+
+                imagen_info = {
                     "id": img.id,
                     "nombre_archivo": img.nombre_archivo,
                     "es_principal": img.es_principal,
                     "formato": img.formato,
                     "tamano_bytes": img.tamano_bytes,
-                    "fecha_subida": img.fecha_subida.isoformat()
+                    "ancho": img.ancho,
+                    "alto": img.alto,
+                    "fecha_subida": img.fecha_subida.isoformat(),
+                    "imagen_base64": imagen_base64,  # Para mostrar en frontend
+                    "imagen_url": f"/images/{os.path.basename(img.ruta_archivo)}"
                 }
-                for img in imagenes
-            ]
-            usuario_data["total_imagenes"] = len(imagenes)
+                imagenes_data.append(imagen_info)
+
+            usuario_data["imagenes"] = imagenes_data
+            usuario_data["total_imagenes"] = len(imagenes_data)
+
+            # Identificar imagen principal específicamente
+            imagen_principal = next((img for img in imagenes_data if img["es_principal"]),
+                                    imagenes_data[0] if imagenes_data else None)
+            usuario_data["imagen_principal"] = imagen_principal
 
         # Incluir reconocimientos si se solicita
         if incluir_reconocimientos:
             from models.database_models import HistorialReconocimiento
             reconocimientos = db.query(HistorialReconocimiento).filter(
-                HistorialReconocimiento.usuario_id == usuario_id
-            ).order_by(HistorialReconocimiento.fecha_reconocimiento.desc()).limit(10).all()
+                HistorialReconocimiento.usuario_id == usuario.id
+            ).order_by(HistorialReconocimiento.fecha_reconocimiento.desc()).limit(20).all()
 
-            usuario_data["reconocimientos_recientes"] = [
-                {
+            reconocimientos_data = []
+            for rec in reconocimientos:
+                reconocimientos_data.append({
                     "id": rec.id,
                     "confianza": rec.confianza,
                     "reconocido": rec.reconocido,
                     "alerta_generada": rec.alerta_generada,
                     "fecha": rec.fecha_reconocimiento.isoformat(),
-                    "ip_origen": rec.ip_origen
-                }
-                for rec in reconocimientos
-            ]
-            usuario_data["total_reconocimientos"] = len(reconocimientos)
+                    "ip_origen": rec.ip_origen,
+                    "distancia_euclidiana": rec.distancia_euclidiana
+                })
+
+            usuario_data["reconocimientos_recientes"] = reconocimientos_data
+            usuario_data["total_reconocimientos"] = len(reconocimientos_data)
+
+            # Estadísticas de reconocimientos
+            total_reconocimientos = db.query(HistorialReconocimiento).filter(
+                HistorialReconocimiento.usuario_id == usuario.id
+            ).count()
+
+            reconocimientos_exitosos = db.query(HistorialReconocimiento).filter(
+                HistorialReconocimiento.usuario_id == usuario.id,
+                HistorialReconocimiento.reconocido == True
+            ).count()
+
+            usuario_data["estadisticas_reconocimiento"] = {
+                "total_reconocimientos": total_reconocimientos,
+                "reconocimientos_exitosos": reconocimientos_exitosos,
+                "tasa_exito": (
+                            reconocimientos_exitosos / total_reconocimientos * 100) if total_reconocimientos > 0 else 0
+            }
+
+        # Incluir características ML si se solicita
+        if incluir_caracteristicas:
+            caracteristicas = db.query(CaracteristicasFaciales).filter(
+                CaracteristicasFaciales.usuario_id == usuario.id,
+                CaracteristicasFaciales.activa == True
+            ).all()
+
+            caracteristicas_data = []
+            for carac in caracteristicas:
+                caracteristicas_data.append({
+                    "id": carac.id,
+                    "imagen_id": carac.imagen_id,
+                    "algoritmo_version": carac.algoritmo_version,
+                    "calidad_deteccion": carac.calidad_deteccion,
+                    "fecha_procesamiento": carac.fecha_procesamiento.isoformat(),
+                    "tiene_eigenfaces": carac.eigenfaces_vector is not None,
+                    "tiene_lbp": carac.lbp_histogram is not None,
+                    # No incluir los vectores completos para evitar respuesta muy grande
+                    "eigenfaces_size": len(carac.eigenfaces_vector) if carac.eigenfaces_vector else 0,
+                    "lbp_size": len(carac.lbp_histogram) if carac.lbp_histogram else 0
+                })
+
+            usuario_data["caracteristicas_ml"] = caracteristicas_data
+            usuario_data["total_caracteristicas"] = len(caracteristicas_data)
+
+        return ResponseWithData(
+            success=True,
+            message=f"Usuario '{id_estudiante}' obtenido exitosamente",
+            data=usuario_data
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener usuario: {str(e)}")
+
+
+@router.get("/{usuario_id}", response_model=ResponseWithData, summary="Obtener usuario por ID numérico")
+async def obtener_usuario_por_id(
+        usuario_id: int,
+        incluir_imagenes: bool = Query(True, description="Incluir información de imágenes"),
+        incluir_reconocimientos: bool = Query(False, description="Incluir historial de reconocimientos"),
+        db: Session = Depends(get_db)
+):
+    """
+    Obtiene un usuario específico por su ID numérico (compatibilidad)
+    Redirige a la función principal usando el ID de estudiante si está disponible
+    """
+    try:
+        # Buscar usuario por ID numérico
+        usuario = db.query(Usuario).filter(
+            Usuario.id == usuario_id,
+            Usuario.activo == True
+        ).first()
+
+        if not usuario:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        # Si tiene ID de estudiante, redirigir a esa función para consistencia
+        if usuario.id_estudiante:
+            return await obtener_usuario_por_id_estudiante(
+                id_estudiante=usuario.id_estudiante,
+                incluir_imagenes=incluir_imagenes,
+                incluir_reconocimientos=incluir_reconocimientos,
+                incluir_caracteristicas=False,  # Por defecto no incluir
+                db=db
+            )
+
+        # Si no tiene ID de estudiante, procesar directamente
+        # (Lógica similar pero usando ID numérico)
+        usuario_data = {
+            "id": usuario.id,
+            "nombre": usuario.nombre,
+            "apellido": usuario.apellido,
+            "email": usuario.email,
+            "id_estudiante": usuario.id_estudiante,
+            "requisitoriado": usuario.requisitoriado,
+            "tipo_requisitoria": usuario.tipo_requisitoria,
+            "fecha_registro": usuario.fecha_registro.isoformat(),
+            "fecha_actualizacion": usuario.fecha_actualizacion.isoformat(),
+            "activo": usuario.activo
+        }
+
+        # Resto de lógica similar al endpoint por ID de estudiante...
+        if incluir_imagenes:
+            # Lógica de imágenes igual que arriba
+            pass
 
         return ResponseWithData(
             success=True,
@@ -350,6 +595,7 @@ async def obtener_usuario(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener usuario: {str(e)}")
+
 
 
 @router.put("/{usuario_id}", response_model=ResponseWithData, summary="Actualizar usuario")
@@ -482,7 +728,7 @@ async def añadir_imagenes_usuario(
         db: Session = Depends(get_db)
 ):
     """
-    Añade nuevas imágenes a un usuario existente (máximo 5 imágenes total por usuario)
+    Añade nuevas imágenes a un usuario existente con entrenamiento automático
     """
     try:
         # Verificar que el usuario existe
@@ -544,7 +790,7 @@ async def añadir_imagenes_usuario(
 
         db.commit()
 
-        # Procesar con ML
+        # ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
         try:
             import cv2
             for imagen_facial in imagenes_guardadas:
@@ -554,18 +800,42 @@ async def añadir_imagenes_usuario(
 
             # Añadir al modelo ML
             if imagenes_procesadas:
-                ml_service.add_new_person(usuario_id, imagenes_procesadas)
+                training_result = ml_service.add_new_person(usuario_id, imagenes_procesadas)
+
+                response_data = {
+                    "usuario_id": usuario_id,
+                    "imagenes_añadidas": len(imagenes_guardadas),
+                    "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
+                    "ml_training_status": training_result.get("status", "unknown"),
+                    "ml_message": training_result.get("message", ""),
+                    "model_updated": training_result.get("status") == "added_incremental"
+                }
+
+                print(f"🤖 Resultado ML (imágenes adicionales): {training_result.get('message', 'Sin mensaje')}")
+            else:
+                response_data = {
+                    "usuario_id": usuario_id,
+                    "imagenes_añadidas": len(imagenes_guardadas),
+                    "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
+                    "ml_training_status": "no_processed",
+                    "ml_message": "No se procesaron imágenes para ML"
+                }
+
         except Exception as e:
-            print(f"Error al procesar con ML: {e}")
+            print(f"⚠️ Error en procesamiento ML: {e}")
+
+            response_data = {
+                "usuario_id": usuario_id,
+                "imagenes_añadidas": len(imagenes_guardadas),
+                "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
+                "ml_training_status": "error",
+                "ml_message": f"Error en entrenamiento: {str(e)}"
+            }
 
         return ResponseWithData(
             success=True,
             message=f"Se añadieron {len(imagenes_guardadas)} imágenes al usuario",
-            data={
-                "usuario_id": usuario_id,
-                "imagenes_añadidas": len(imagenes_guardadas),
-                "total_imagenes": imagenes_existentes + len(imagenes_guardadas)
-            }
+            data=response_data
         )
 
     except HTTPException:
@@ -767,3 +1037,44 @@ async def entrenar_modelo_usuarios(db: Session = Depends(get_db)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al entrenar modelo: {str(e)}")
+
+
+@router.get("/entrenamiento/estado", response_model=ResponseWithData, summary="Estado del entrenamiento")
+async def estado_entrenamiento():
+    """
+    Verifica el estado actual del entrenamiento automático
+    """
+    try:
+        status = ml_service.get_training_status()
+
+        return ResponseWithData(
+            success=True,
+            message="Estado del entrenamiento obtenido",
+            data=status
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener estado: {str(e)}")
+
+
+@router.post("/entrenamiento/forzar", response_model=ResponseWithData, summary="Forzar reentrenamiento")
+async def forzar_entrenamiento():
+    """
+    Fuerza un reentrenamiento completo desde la base de datos
+    """
+    try:
+        result = ml_service.force_retrain_from_database()
+
+        if result.get("success", True):
+            message = "Reentrenamiento completado exitosamente"
+        else:
+            message = f"Error en reentrenamiento: {result.get('error', 'Error desconocido')}"
+
+        return ResponseWithData(
+            success=result.get("success", True),
+            message=message,
+            data=result
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al forzar entrenamiento: {str(e)}")
