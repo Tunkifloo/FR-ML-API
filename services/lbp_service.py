@@ -41,67 +41,94 @@ class LBPService:
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
         Preprocesa una imagen para el algoritmo LBP
-
-        Args:
-            image: Imagen en formato numpy array
-
-        Returns:
-            Imagen preprocesada
+        IMPORTANTE: Mantener consistencia con eigenfaces
         """
+        print(f"🔧 LBP preprocess input: {image.shape}")
+
         # Convertir a escala de grises si es necesario
         if len(image.shape) == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            print(f"🔧 Convertida a escala de grises: {image.shape}")
+        elif len(image.shape) == 1:
+            # Si recibimos un vector 1D, intentar reformatear
+            size = int(np.sqrt(image.shape[0]))
+            if size * size == image.shape[0]:
+                image = image.reshape(size, size)
+                print(f"🔧 Vector 1D reformateado: {image.shape}")
+            else:
+                raise ValueError(f"Vector 1D no puede ser reformateado: {image.shape}")
 
-        # Redimensionar a tamaño estándar
-        image = cv2.resize(image, self.image_size)
+        # Redimensionar a tamaño estándar (MISMO que eigenfaces)
+        image = cv2.resize(image, self.image_size, interpolation=cv2.INTER_LANCZOS4)
+        print(f"🔧 Redimensionada: {image.shape}")
 
-        # Aplicar filtro gaussiano para reducir ruido
+        # Aplicar filtro gaussiano
         image = cv2.GaussianBlur(image, (3, 3), 0)
 
-        # Ecualización adaptiva de histograma
+        # Ecualización adaptiva
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         image = clahe.apply(image)
 
+        print(f"✅ LBP preprocessing completado: {image.shape}")
         return image
 
     def extract_lbp_features(self, image: np.ndarray) -> np.ndarray:
         """
         Extrae características LBP de una imagen
-
-        Args:
-            image: Imagen preprocesada en escala de grises
-
-        Returns:
-            Vector de características LBP (histograma concatenado)
+        IMPORTANTE: Asegurar que la imagen sea 2D
         """
-        # Calcular LBP de la imagen completa
+        print(f"🔍 LBP input shape: {image.shape}")
+
+        # CRÍTICO: Asegurar que la imagen sea 2D
+        if len(image.shape) == 3:
+            # Si es 3D (color), convertir a escala de grises
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            print(f"🔧 Convertida a escala de grises: {image.shape}")
+        elif len(image.shape) == 1:
+            # Si es 1D (vector), intentar reformatear
+            print(f"⚠️ Imagen 1D detectada, shape: {image.shape}")
+            # Intentar formar una imagen cuadrada
+            size = int(np.sqrt(image.shape[0]))
+            if size * size == image.shape[0]:
+                image = image.reshape(size, size)
+                print(f"🔧 Reformateada a 2D: {image.shape}")
+            else:
+                raise ValueError(f"No se puede convertir vector 1D {image.shape} a imagen 2D")
+
+        # Asegurar que ahora sea 2D
+        if len(image.shape) != 2:
+            raise ValueError(f"La imagen debe ser 2D, recibida: {image.shape}")
+
+        print(f"✅ Imagen 2D confirmada: {image.shape}")
+
+        # Procesar con LBP
+        processed_image = self.preprocess_image(image)
+        print(f"🔧 Imagen preprocesada shape: {processed_image.shape}")
+
+        # Calcular LBP
         lbp_image = local_binary_pattern(
-            image,
+            processed_image,
             self.n_points,
             self.radius,
             method=self.method
         )
 
-        # Dividir la imagen en grilla para análisis local
+        print(f"🔍 LBP calculado shape: {lbp_image.shape}")
+
+        # Dividir en grilla y calcular histogramas
         height, width = lbp_image.shape
         cell_height = height // self.grid_size[0]
         cell_width = width // self.grid_size[1]
 
-        # Lista para almacenar histogramas de cada celda
         histograms = []
-
         for i in range(self.grid_size[0]):
             for j in range(self.grid_size[1]):
-                # Extraer celda
                 start_row = i * cell_height
                 end_row = (i + 1) * cell_height
                 start_col = j * cell_width
                 end_col = (j + 1) * cell_width
 
                 cell = lbp_image[start_row:end_row, start_col:end_col]
-
-                # Calcular histograma de la celda
-                # Para patrones uniformes, tenemos n_points + 2 bins
                 n_bins = self.n_points + 2
                 hist, _ = np.histogram(
                     cell.ravel(),
@@ -109,11 +136,10 @@ class LBPService:
                     range=(0, n_bins),
                     density=True
                 )
-
                 histograms.append(hist)
 
-        # Concatenar todos los histogramas
         feature_vector = np.concatenate(histograms)
+        print(f"✅ LBP features shape: {feature_vector.shape}")
 
         return feature_vector
 

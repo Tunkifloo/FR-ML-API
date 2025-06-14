@@ -31,33 +31,15 @@ def crear_usuarios_ejemplo():
             {
                 "nombre": "Juan Carlos",
                 "apellido": "Pérez García",
-                "id_estudiante": "000243425",
+                "id_estudiante": "000000000",
                 "email": "juan.perez@universidad.edu"
             },
             {
                 "nombre": "María Elena",
                 "apellido": "González López",
-                "id_estudiante": "000243426",
+                "id_estudiante": "999999999",
                 "email": "maria.gonzalez@universidad.edu"
             },
-            {
-                "nombre": "Carlos Alberto",
-                "apellido": "Rodríguez Vega",
-                "id_estudiante": "000243427",
-                "email": "carlos.rodriguez@universidad.edu"
-            },
-            {
-                "nombre": "Ana Sofía",
-                "apellido": "Martínez Cruz",
-                "id_estudiante": None,  # Sin ID de estudiante
-                "email": "ana.martinez@universidad.edu"
-            },
-            {
-                "nombre": "Roberto",
-                "apellido": "Hernández Silva",
-                "id_estudiante": "000243428",
-                "email": "roberto.hernandez@universidad.edu"
-            }
         ]
 
         for usuario_data in usuarios_ejemplo:

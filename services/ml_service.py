@@ -75,52 +75,43 @@ class MLService:
 
     def train_models(self, images_by_person: Dict[int, List[np.ndarray]]) -> Dict[str, Any]:
         """
-        Entrena ambos modelos (Eigenfaces y LBP) con las imágenes proporcionadas
-
-        Args:
-            images_by_person: Diccionario {person_id: [list_of_images]}
-
-        Returns:
-            Diccionario con estadísticas del entrenamiento
+        Entrena modelos conservando imágenes originales para características
         """
         print("🚀 Iniciando entrenamiento del modelo híbrido...")
 
         # Preparar datos de entrenamiento
         all_images = []
         all_labels = []
+        original_images_by_person = {}  # ⚡ MANTENER ORIGINALES
 
         for person_id, images in images_by_person.items():
-            for image in images:
-                # Preprocesar imagen
-                processed_face = self.preprocess_image_for_training(image)
+            person_processed = []
+            person_originals = []
 
+            for image in images:
+                # Guardar imagen original
+                person_originals.append(image.copy())
+
+                # Procesar para entrenamiento
+                processed_face = self.preprocess_image_for_training(image)
                 if processed_face is not None:
                     all_images.append(processed_face)
                     all_labels.append(person_id)
+                    person_processed.append(processed_face)
 
-        if not all_images:
-            raise ValueError("No se pudieron procesar imágenes para entrenamiento")
+            if person_originals:
+                original_images_by_person[person_id] = person_originals
 
-        print(f"📊 Datos de entrenamiento: {len(all_images)} imágenes de {len(set(all_labels))} personas")
-
-        # Entrenar Eigenfaces
-        print("🎭 Entrenando modelo Eigenfaces...")
+        # Entrenar con imágenes procesadas
         self.eigenfaces_service.train(all_images, all_labels)
-
-        # Entrenar LBP
-        print("🔍 Entrenando modelo LBP...")
         self.lbp_service.train(all_images, all_labels)
 
         # Guardar modelos
         self.eigenfaces_service.save_model()
         self.lbp_service.save_model()
-
-        # Generar y guardar embeddings
-        self._generate_and_save_embeddings(all_images, all_labels)
-
         self.is_trained = True
 
-        # Estadísticas del entrenamiento
+        # Estadísticas
         training_stats = {
             "timestamp": datetime.now().isoformat(),
             "total_images": len(all_images),
@@ -130,11 +121,143 @@ class MLService:
             "model_version": self.model_version
         }
 
-        # Guardar historial
-        self.training_history.append(training_stats)
+        # ⚡ USAR IMÁGENES ORIGINALES para características
+        try:
+            self._save_characteristics_to_db(original_images_by_person)
+            self._save_training_record(training_stats)
+        except Exception as e:
+            print(f"⚠️ Error en BD: {e}")
 
-        print("✅ Entrenamiento híbrido completado exitosamente!")
         return training_stats
+
+    def _save_characteristics_to_db(self, images_by_person: Dict[int, List[np.ndarray]]):
+        """
+        Guarda características faciales usando LAS IMÁGENES ORIGINALES
+        """
+        from config.database import SessionLocal
+        from models.database_models import CaracteristicasFaciales, ImagenFacial
+
+        print("💾 INICIANDO GUARDADO DE CARACTERÍSTICAS EN BD")
+
+        db = SessionLocal()
+        try:
+            characteristics_saved = 0
+            errors = []
+
+            for person_id, images in images_by_person.items():
+                print(f"\n👤 Procesando persona ID: {person_id}")
+
+                # Obtener imágenes de la BD
+                db_images = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == person_id,
+                    ImagenFacial.activa == True
+                ).all()
+
+                if not db_images:
+                    continue
+
+                images_to_process = min(len(images), len(db_images))
+
+                for i in range(images_to_process):
+                    original_image = images[i]  # Imagen original 3D/2D
+                    db_image = db_images[i]
+
+                    try:
+                        print(f"   🔍 Imagen original shape: {original_image.shape}")
+
+                        # ⚡ CRÍTICO: Usar la imagen ORIGINAL para ambos algoritmos
+                        # Cada servicio debe hacer su propio preprocesamiento
+
+                        # Eigenfaces - usa su propio preprocesamiento
+                        print(f"   📐 Extrayendo Eigenfaces...")
+                        eigenfaces_features = self.eigenfaces_service.extract_features(original_image)
+                        print(f"   ✅ Eigenfaces OK: {eigenfaces_features.shape}")
+
+                        # LBP - usa su propio preprocesamiento desde la imagen ORIGINAL
+                        print(f"   🔍 Extrayendo LBP...")
+                        lbp_features = self.lbp_service.extract_lbp_features(original_image)
+                        print(f"   ✅ LBP OK: {lbp_features.shape}")
+
+                        # Verificar características existentes
+                        existing = db.query(CaracteristicasFaciales).filter(
+                            CaracteristicasFaciales.imagen_id == db_image.id
+                        ).first()
+
+                        if existing:
+                            existing.eigenfaces_vector = eigenfaces_features.tolist()
+                            existing.lbp_histogram = lbp_features.tolist()
+                            existing.fecha_procesamiento = datetime.now()
+                        else:
+                            caracteristicas = CaracteristicasFaciales(
+                                usuario_id=person_id,
+                                imagen_id=db_image.id,
+                                eigenfaces_vector=eigenfaces_features.tolist(),
+                                lbp_histogram=lbp_features.tolist(),
+                                algoritmo_version="2.0",
+                                calidad_deteccion=85
+                            )
+                            db.add(caracteristicas)
+
+                        characteristics_saved += 1
+                        print(f"   ✅ Características guardadas")
+
+                    except Exception as e:
+                        error_msg = f"Error en imagen {db_image.id}: {str(e)}"
+                        print(f"   ❌ {error_msg}")
+                        errors.append(error_msg)
+                        continue
+
+            if characteristics_saved > 0:
+                db.commit()
+                print(f"✅ {characteristics_saved} características guardadas en BD")
+
+            if errors:
+                print(f"\n⚠️ ERRORES ({len(errors)}):")
+                for error in errors[:3]:
+                    print(f"   • {error}")
+
+        except Exception as e:
+            print(f"❌ ERROR CRÍTICO: {str(e)}")
+            db.rollback()
+        finally:
+            db.close()
+
+    def _save_training_record(self, training_stats: Dict[str, Any]):
+        """
+        Guarda registro del entrenamiento en BD
+        """
+        from config.database import SessionLocal
+        from models.database_models import ModeloEntrenamiento
+
+        db = SessionLocal()
+        try:
+            # Crear registro de entrenamiento
+            training_record = ModeloEntrenamiento(
+                version=f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                algoritmo="hybrid",
+                total_usuarios=training_stats.get("unique_persons", 0),
+                total_imagenes=training_stats.get("total_images", 0),
+                precision_promedio="N/A",  # Se calculará después con validación
+                ruta_modelo_eigenfaces="storage/models/eigenfaces_model.pkl",
+                ruta_modelo_lbp="storage/models/lbp_model.pkl",
+                configuracion={
+                    "eigenfaces_components": training_stats.get("eigenfaces_info", {}).get("n_components", 0),
+                    "lbp_radius": training_stats.get("lbp_info", {}).get("radius", 0),
+                    "lbp_points": training_stats.get("lbp_info", {}).get("n_points", 0),
+                    "training_stats": training_stats
+                }
+            )
+
+            db.add(training_record)
+            db.commit()
+
+            print(f"✅ Registro de entrenamiento guardado: {training_record.version}")
+
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Error guardando registro de entrenamiento: {e}")
+        finally:
+            db.close()
 
     def add_new_person(self, person_id: int, images: List[np.ndarray]) -> Dict[str, Any]:
         """

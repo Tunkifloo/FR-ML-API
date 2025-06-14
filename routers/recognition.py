@@ -43,9 +43,9 @@ def convert_numpy_types(obj):
     """
     if isinstance(obj, np.bool_):
         return bool(obj)
-    elif isinstance(obj, np.integer):
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
         return int(obj)
-    elif isinstance(obj, np.floating):
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
         return float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -53,9 +53,56 @@ def convert_numpy_types(obj):
         return {key: convert_numpy_types(value) for key, value in obj.items()}
     elif isinstance(obj, list):
         return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_types(item) for item in obj)
     else:
         return obj
 
+
+def save_recognition_to_history(self, recognition_result: Dict, image_path: str, client_ip: str, db: Session):
+    """
+    Guarda el reconocimiento en el historial
+    """
+    try:
+        historial = HistorialReconocimiento(
+            usuario_id=recognition_result.get("person_id"),
+            imagen_consulta_path=image_path,
+            confianza=int(recognition_result.get("confidence", 0)),
+            distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
+            reconocido=recognition_result.get("recognized", False),
+            alerta_generada=recognition_result.get("alerta_seguridad") is not None,
+            caracteristicas_consulta=self._clean_for_json(recognition_result.get("details", {})),
+            ip_origen=client_ip
+        )
+
+        db.add(historial)
+        db.commit()
+
+        return historial.id
+
+    except Exception as e:
+        print(f"⚠️ Error guardando historial: {e}")
+        return None
+
+
+def _clean_for_json(self, data):
+    """
+    Limpia datos para JSON (convierte numpy types)
+    """
+    if isinstance(data, dict):
+        return {k: self._clean_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [self._clean_for_json(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()
+    elif isinstance(data, (np.int64, np.int32)):
+        return int(data)
+    elif isinstance(data, (np.float64, np.float32)):
+        return float(data)
+    elif isinstance(data, np.bool_):
+        return bool(data)
+    else:
+        return data
 
 @router.post("/identificar", response_model=ResponseWithData, summary="Identificar persona en imagen")
 async def identificar_persona(
@@ -115,6 +162,7 @@ async def identificar_persona(
         start_time = datetime.now()
         recognition_result = ml_service.recognize_face(img, method=algoritmo.value)
         end_time = datetime.now()
+        recognition_result = convert_numpy_types(recognition_result)
 
         processing_time = (end_time - start_time).total_seconds()
 
@@ -130,7 +178,7 @@ async def identificar_persona(
 
         # Incluir detalles técnicos si se solicita
         if incluir_detalles:
-            response_data["detalles_tecnicos"] = recognition_result.get("details", {})
+            response_data["detalles_tecnicos"] = convert_numpy_types(recognition_result.get("details", {}))
 
         # Variables para información de la persona y alerta
         persona_info = None
@@ -202,6 +250,32 @@ async def identificar_persona(
                 mensaje = f"✅ Persona identificada: {persona_info['nombre']} {persona_info['apellido']}"
         else:
             mensaje = "❌ No se pudo identificar a la persona en la imagen"
+
+        response_data = convert_numpy_types(response_data)
+
+        # Registrar en historial CON DATOS LIMPIOS
+        if recognition_result.get("recognized"):
+            try:
+                historial = HistorialReconocimiento(
+                    usuario_id=response_data["persona_id"],
+                    imagen_consulta_path=temp_file_path,
+                    confianza=int(response_data["confianza"]),
+                    distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
+                    reconocido=response_data["reconocido"],
+                    alerta_generada=alerta_seguridad is not None,
+                    caracteristicas_consulta=convert_numpy_types(recognition_result.get("details", {})),
+                    ip_origen=client_ip
+                )
+
+                db.add(historial)
+                db.commit()
+
+                response_data["historial_id"] = historial.id
+                print(f"💾 Historial guardado: ID={historial.id}")
+
+            except Exception as e:
+                print(f"⚠️ Error guardando historial: {e}")
+                # No fallar el reconocimiento por error de historial
 
         return ResponseWithData(
             success=True,
