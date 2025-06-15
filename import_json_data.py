@@ -263,8 +263,10 @@ class JSONImporter:
             try:
                 img = cv2.imread(filepath)
                 if img is not None:
-                    self.ml_service.add_new_person(nuevo_usuario.id, [img])
-                    print(f"🤖 Modelo ML actualizado para usuario {nuevo_usuario.id}")
+                    # NO entrenar aquí para evitar problemas
+                    print(f"[ML] Imagen lista para entrenamiento posterior: usuario {nuevo_usuario.id}")
+                else:
+                    print(f"[WARNING] No se pudo leer imagen para ML")
             except Exception as e:
                 print(f"⚠️ Error actualizando modelo ML: {str(e)}")
 
@@ -308,6 +310,10 @@ class JSONImporter:
                 if (index + 1) % 10 == 0:
                     print(f"📊 Progreso: {index + 1}/{len(records)} registros procesados")
 
+                # Entrenar modelos ML después de importar todos los usuarios válidos
+                if self.stats["successful_imports"] > 0:
+                    self.train_ml_models_after_import()
+
             # Guardar modelos ML
             try:
                 if self.ml_service.is_trained:
@@ -320,8 +326,7 @@ class JSONImporter:
         except Exception as e:
             print(f"❌ Error durante la importación: {str(e)}")
 
-        finally:
-            self.db.close()
+
 
         # Mostrar estadísticas finales
         end_time = datetime.now()
@@ -347,6 +352,56 @@ class JSONImporter:
 
         print("\n🎉 Importación completada!")
         print("💡 Puedes probar el sistema con: python main.py")
+
+    def train_ml_models_after_import(self):
+        """
+        Entrena modelos ML DESPUÉS de importar todos los usuarios válidos
+        """
+        try:
+            print("\n[ML] INICIANDO ENTRENAMIENTO ML POST-IMPORTACIÓN")
+            print("=" * 60)
+
+            # Obtener todos los usuarios recién importados con imágenes
+            usuarios_con_imagenes = self.db.query(Usuario).filter(
+                Usuario.activo == True
+            ).join(ImagenFacial).filter(
+                ImagenFacial.activa == True
+            ).distinct().all()
+
+            if len(usuarios_con_imagenes) < 2:
+                print("[WARNING] Se necesitan al menos 2 usuarios para entrenar ML")
+                return
+
+            print(f"[ML] Encontrados {len(usuarios_con_imagenes)} usuarios para entrenamiento")
+
+            # Preparar datos para entrenamiento
+            images_by_person = {}
+            for usuario in usuarios_con_imagenes:
+                imagenes = self.db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == usuario.id,
+                    ImagenFacial.activa == True
+                ).all()
+
+                user_images = []
+                for imagen in imagenes:
+                    if os.path.exists(imagen.ruta_archivo):
+                        img = cv2.imread(imagen.ruta_archivo)
+                        if img is not None:
+                            user_images.append(img)
+
+                if user_images:
+                    images_by_person[usuario.id] = user_images
+
+            if len(images_by_person) >= 2:
+                print(f"[ML] Entrenando con {len(images_by_person)} usuarios...")
+                training_stats = self.ml_service.train_models(images_by_person)
+                print("[SUCCESS] Entrenamiento ML completado exitosamente")
+                print(f"[STATS] Estadísticas: {training_stats.get('total_images', 0)} imágenes procesadas")
+            else:
+                print("[WARNING] No hay suficientes usuarios válidos para entrenamiento ML")
+
+        except Exception as e:
+            print(f"[ERROR] Error en entrenamiento ML: {str(e)}")
 
 
 def main():

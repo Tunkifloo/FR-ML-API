@@ -266,73 +266,173 @@ class MLService:
 
     def add_new_person(self, person_id: int, images: List[np.ndarray]) -> Dict[str, Any]:
         """
-        Añade una nueva persona al sistema con entrenamiento automático inteligente
-
-        Args:
-            person_id: ID de la nueva persona
-            images: Lista de imágenes de la persona
-
-        Returns:
-            Estadísticas del proceso
+        Añade una nueva persona al sistema de forma ROBUSTA
+        VERSIÓN SEGURA: Maneja errores sin fallar el registro del usuario
         """
-        print(f"➕ Añadiendo nueva persona ID: {person_id}")
+        try:
+            print(f"[ML] Procesando persona ID: {person_id} con {len(images)} imágenes")
 
-        # Preprocesar imágenes
-        processed_images = []
-        for image in images:
-            processed_face = self.preprocess_image_for_training(image)
-            if processed_face is not None:
-                processed_images.append(processed_face)
-
-        if not processed_images:
-            raise ValueError("No se pudieron procesar las imágenes proporcionadas")
-
-        # LÓGICA MEJORADA: Determinar acción según estado del modelo
-        if not self.is_trained:
-            print("🔄 Modelo no entrenado - Acumulando datos para entrenamiento inicial")
-
-            # Añadir a pendientes
-            self.pending_persons[person_id] = processed_images
-
-            # Verificar si tenemos suficientes personas para entrenar
-            if len(self.pending_persons) >= self.min_persons_for_training:
-                print(f"🚀 Iniciando entrenamiento automático con {len(self.pending_persons)} personas")
-                return self._trigger_auto_training()
-            else:
-                print(
-                    f"⏳ Esperando más datos. Personas actuales: {len(self.pending_persons)}/{self.min_persons_for_training}")
+            # VALIDACIÓN INICIAL
+            if not images:
                 return {
+                    "status": "error",
+                    "message": "No se proporcionaron imágenes",
                     "person_id": person_id,
-                    "images_processed": len(processed_images),
-                    "status": "pending_training",
-                    "message": f"Datos guardados. Se necesitan {self.min_persons_for_training - len(self.pending_persons)} personas más para entrenar",
                     "timestamp": datetime.now().isoformat()
                 }
-        else:
-            print("🔄 Modelo ya entrenado - Entrenamiento incremental")
 
-            # Entrenamiento incremental
-            self.eigenfaces_service.add_new_person(processed_images, person_id)
-            self.lbp_service.add_new_person(processed_images, person_id)
+            # PREPROCESAR IMÁGENES DE FORMA SEGURA
+            processed_images = []
+            for i, image in enumerate(images):
+                try:
+                    processed_face = self.preprocess_image_for_training(image)
+                    if processed_face is not None:
+                        processed_images.append(processed_face)
+                    else:
+                        print(f"[WARNING] No se pudo procesar imagen {i + 1} para persona {person_id}")
+                except Exception as e:
+                    print(f"[WARNING] Error procesando imagen {i + 1}: {str(e)}")
+                    continue
 
-            # Guardar modelos actualizados
-            self.eigenfaces_service.save_model()
-            self.lbp_service.save_model()
+            if not processed_images:
+                return {
+                    "status": "error",
+                    "message": "No se pudieron procesar ninguna de las imágenes",
+                    "person_id": person_id,
+                    "timestamp": datetime.now().isoformat()
+                }
 
-            # Generar embeddings
-            self._generate_and_save_embeddings(processed_images, [person_id] * len(processed_images))
+            print(f"[ML] {len(processed_images)}/{len(images)} imágenes procesadas exitosamente")
 
-            # Guardar características en BD
+            # ESTRATEGIA SEGURA: ENTRENAMIENTO INCREMENTAL SIEMPRE
             try:
-                self._save_incremental_characteristics({person_id: images})  # Usar imágenes originales
-            except Exception as e:
-                print(f"⚠️ Error guardando características en BD: {e}")
+                # Verificar si los modelos están cargados
+                if not self.is_trained:
+                    print("[ML] Modelos no entrenados, intentando cargar...")
+                    self.load_models()
 
+                # Si aún no están entrenados, usar entrenamiento desde BD
+                if not self.is_trained:
+                    print("[ML] Modelos no disponibles, iniciando entrenamiento desde BD...")
+                    return self._train_from_database_safely()
+
+                # ENTRENAMIENTO INCREMENTAL SEGURO
+                try:
+                    print(f"[ML] Añadiendo persona {person_id} al modelo existente...")
+
+                    # Añadir a eigenfaces
+                    self.eigenfaces_service.add_new_person(processed_images, person_id)
+                    print(f"[ML] Eigenfaces actualizado para persona {person_id}")
+
+                    # Añadir a LBP
+                    self.lbp_service.add_new_person(processed_images, person_id)
+                    print(f"[ML] LBP actualizado para persona {person_id}")
+
+                    # GUARDAR MODELOS DE FORMA SEGURA
+                    try:
+                        self.eigenfaces_service.save_model()
+                        self.lbp_service.save_model()
+                        print(f"[ML] Modelos guardados exitosamente")
+                    except Exception as e:
+                        print(f"[WARNING] Error guardando modelos: {e}")
+                        # No fallar por error de guardado
+
+                    return {
+                        "status": "added_incremental",
+                        "message": f"Persona {person_id} añadida exitosamente al modelo",
+                        "person_id": person_id,
+                        "images_processed": len(processed_images),
+                        "timestamp": datetime.now().isoformat()
+                    }
+
+                except Exception as e:
+                    print(f"[ERROR] Error en entrenamiento incremental: {e}")
+                    # FALLBACK: Intentar reentrenamiento completo
+                    print(f"[ML] Intentando reentrenamiento completo como fallback...")
+                    return self._train_from_database_safely()
+
+            except Exception as e:
+                print(f"[ERROR] Error general en entrenamiento: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Error en entrenamiento: {str(e)}",
+                    "person_id": person_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+
+        except Exception as e:
+            print(f"[ERROR] Error crítico en add_new_person: {e}")
             return {
+                "status": "error",
+                "message": f"Error crítico: {str(e)}",
                 "person_id": person_id,
-                "images_processed": len(processed_images),
-                "status": "added_incremental",
-                "message": "Persona añadida al modelo existente",
+                "timestamp": datetime.now().isoformat()
+            }
+
+    def _train_from_database_safely(self) -> Dict[str, Any]:
+        """
+        NUEVA FUNCIÓN: Entrena desde la base de datos de forma segura
+        """
+        try:
+            print("[ML] Iniciando entrenamiento seguro desde base de datos...")
+
+            from config.database import SessionLocal
+            from models.database_models import Usuario, ImagenFacial
+            import cv2
+
+            db = SessionLocal()
+            try:
+                # Obtener todos los usuarios activos con imágenes
+                usuarios = db.query(Usuario).filter(Usuario.activo == True).all()
+                images_by_person = {}
+
+                for usuario in usuarios:
+                    imagenes = db.query(ImagenFacial).filter(
+                        ImagenFacial.usuario_id == usuario.id,
+                        ImagenFacial.activa == True
+                    ).all()
+
+                    if imagenes:
+                        user_images = []
+                        for imagen in imagenes:
+                            try:
+                                if os.path.exists(imagen.ruta_archivo):
+                                    img = cv2.imread(imagen.ruta_archivo)
+                                    if img is not None:
+                                        user_images.append(img)
+                            except Exception as e:
+                                print(f"[WARNING] Error leyendo imagen {imagen.ruta_archivo}: {e}")
+                                continue
+
+                        if user_images:
+                            images_by_person[usuario.id] = user_images
+
+                if len(images_by_person) < 2:
+                    return {
+                        "status": "insufficient_data",
+                        "message": f"Insuficientes usuarios para entrenar. Disponibles: {len(images_by_person)}, Requeridos: 2",
+                        "timestamp": datetime.now().isoformat()
+                    }
+
+                # Entrenar modelo completo
+                print(f"[ML] Entrenando con {len(images_by_person)} usuarios...")
+                training_stats = self.train_models(images_by_person)
+
+                return {
+                    "status": "trained_from_database",
+                    "message": "Modelo entrenado exitosamente desde base de datos",
+                    "training_stats": training_stats,
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            print(f"[ERROR] Error en entrenamiento desde BD: {e}")
+            return {
+                "status": "training_failed",
+                "message": f"Error en entrenamiento desde BD: {str(e)}",
                 "timestamp": datetime.now().isoformat()
             }
 

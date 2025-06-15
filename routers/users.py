@@ -95,7 +95,7 @@ async def crear_usuario(
 ):
     """
     Crea un nuevo usuario con sus imágenes faciales (mínimo 1, máximo 5)
-    CON ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
+    CON ENTRENAMIENTO AUTOMÁTICO INTELIGENTE MEJORADO
     """
     try:
         # Validar número de imágenes
@@ -185,7 +185,7 @@ async def crear_usuario(
 
         db.commit()
 
-        # ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
+        # PROCESAR IMÁGENES PARA ML ANTES DEL ENTRENAMIENTO
         try:
             import cv2
             import numpy as np
@@ -200,65 +200,107 @@ async def crear_usuario(
                     imagen_facial.alto = img.shape[0]
                     imagen_facial.ancho = img.shape[1]
 
-            # CÓDIGO CORREGIDO - Entrenamiento automático inteligente
-            if imagenes_procesadas:
+            db.commit()
+            print(f"[SUCCESS] {len(imagenes_procesadas)} imágenes procesadas para ML")
+
+        except Exception as e:
+            print(f"[WARNING] Error procesando imágenes: {e}")
+
+        # ENTRENAMIENTO ML DE FORMA SEGURA (NO FALLAR CREACIÓN DE USUARIO)
+        ml_result = {
+            "ml_training_status": "not_attempted",
+            "ml_message": "Entrenamiento ML no ejecutado",
+            "model_trained": False
+        }
+
+        if imagenes_procesadas:
+            try:
+                print(f"[ML] Intentando entrenamiento para usuario {nuevo_usuario.id}")
                 training_result = ml_service.add_new_person(nuevo_usuario.id, imagenes_procesadas)
 
-                # Preparar respuesta del usuario
-                usuario_creado = {
-                    "id": nuevo_usuario.id,
-                    "nombre": nuevo_usuario.nombre,
-                    "apellido": nuevo_usuario.apellido,
-                    "email": nuevo_usuario.email,
-                    "id_estudiante": nuevo_usuario.id_estudiante,
-                    "requisitoriado": nuevo_usuario.requisitoriado,
-                    "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
-                    "total_imagenes": len(imagenes_guardadas),
-                    "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
-                    # Información del entrenamiento ML
+                ml_result = {
                     "ml_training_status": training_result.get("status", "unknown"),
-                    "ml_message": training_result.get("message", ""),
-                    "model_trained": training_result.get("status") in ["added_incremental", "auto_trained"]
+                    "ml_message": training_result.get("message", "Sin mensaje"),
+                    "model_trained": training_result.get("status") in [
+                        "added_incremental",
+                        "trained_from_database",
+                        "pending_training"
+                    ]
                 }
 
-                print(f"🤖 Resultado ML: {training_result.get('message', 'Sin mensaje')}")
+                print(f"[ML] Resultado: {training_result.get('message', 'Completado')}")
 
-            else:
-                # Si no se procesaron imágenes
-                usuario_creado = {
-                    "id": nuevo_usuario.id,
-                    "nombre": nuevo_usuario.nombre,
-                    "apellido": nuevo_usuario.apellido,
-                    "email": nuevo_usuario.email,
-                    "id_estudiante": nuevo_usuario.id_estudiante,
-                    "requisitoriado": nuevo_usuario.requisitoriado,
-                    "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
-                    "total_imagenes": len(imagenes_guardadas),
-                    "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
-                    "ml_training_status": "no_processed",
-                    "ml_message": "No se procesaron imágenes para ML",
+                # IMPORTANTE: Guardar características en BD independientemente del resultado ML
+                try:
+                    from models.database_models import CaracteristicasFaciales
+
+                    print(f"[DB] Guardando características en BD para usuario {nuevo_usuario.id}")
+
+                    for i, (imagen_facial, img_original) in enumerate(zip(imagenes_guardadas, imagenes_procesadas)):
+                        try:
+                            # Extraer características usando las imágenes ORIGINALES
+                            eigenfaces_features = ml_service.eigenfaces_service.extract_features(
+                                img_original) if ml_service.eigenfaces_service.is_trained else None
+                            lbp_features = ml_service.lbp_service.extract_lbp_features(
+                                img_original) if ml_service.lbp_service.is_trained else None
+
+                            # Verificar si ya existen características para esta imagen
+                            existing_char = db.query(CaracteristicasFaciales).filter(
+                                CaracteristicasFaciales.imagen_id == imagen_facial.id
+                            ).first()
+
+                            if existing_char:
+                                # Actualizar existente
+                                if eigenfaces_features is not None:
+                                    existing_char.eigenfaces_vector = eigenfaces_features.tolist()
+                                if lbp_features is not None:
+                                    existing_char.lbp_histogram = lbp_features.tolist()
+                                existing_char.fecha_procesamiento = datetime.now()
+                                print(f"[DB] Características actualizadas para imagen {imagen_facial.id}")
+                            else:
+                                # Crear nuevo registro
+                                caracteristicas = CaracteristicasFaciales(
+                                    usuario_id=nuevo_usuario.id,
+                                    imagen_id=imagen_facial.id,
+                                    eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
+                                    lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
+                                    algoritmo_version="2.0",
+                                    calidad_deteccion=85
+                                )
+                                db.add(caracteristicas)
+                                print(f"[DB] Características creadas para imagen {imagen_facial.id}")
+
+                        except Exception as e:
+                            print(f"[WARNING] Error extrayendo características para imagen {imagen_facial.id}: {e}")
+                            continue
+
+                    db.commit()
+                    print(f"[SUCCESS] Características guardadas en BD para usuario {nuevo_usuario.id}")
+
+                except Exception as e:
+                    print(f"[WARNING] Error guardando características en BD: {e}")
+
+            except Exception as e:
+                print(f"[WARNING] Error en entrenamiento ML (usuario creado exitosamente): {e}")
+                ml_result = {
+                    "ml_training_status": "error",
+                    "ml_message": f"Error ML: {str(e)}",
                     "model_trained": False
                 }
 
-        except Exception as e:
-            print(f"⚠️ Error en procesamiento ML: {e}")
-            # No fallar la creación del usuario por errores de ML
-            usuario_creado = {
-                "id": nuevo_usuario.id,
-                "nombre": nuevo_usuario.nombre,
-                "apellido": nuevo_usuario.apellido,
-                "email": nuevo_usuario.email,
-                "id_estudiante": nuevo_usuario.id_estudiante,
-                "requisitoriado": nuevo_usuario.requisitoriado,
-                "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
-                "total_imagenes": len(imagenes_guardadas),
-                "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
-                "ml_training_status": "error",
-                "ml_message": f"Error en entrenamiento: {str(e)}",
-                "model_trained": False
-            }
-
-        db.commit()
+        # Preparar respuesta del usuario (SIEMPRE exitosa)
+        usuario_creado = {
+            "id": nuevo_usuario.id,
+            "nombre": nuevo_usuario.nombre,
+            "apellido": nuevo_usuario.apellido,
+            "email": nuevo_usuario.email,
+            "id_estudiante": nuevo_usuario.id_estudiante,
+            "requisitoriado": nuevo_usuario.requisitoriado,
+            "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
+            "total_imagenes": len(imagenes_guardadas),
+            "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
+            **ml_result  # Incluir resultado ML
+        }
 
         return ResponseWithData(
             success=True,
@@ -728,7 +770,7 @@ async def añadir_imagenes_usuario(
         db: Session = Depends(get_db)
 ):
     """
-    Añade nuevas imágenes a un usuario existente con entrenamiento automático
+    Añade nuevas imágenes a un usuario existente con entrenamiento automático MEJORADO
     """
     try:
         # Verificar que el usuario existe
@@ -790,47 +832,97 @@ async def añadir_imagenes_usuario(
 
         db.commit()
 
-        # ENTRENAMIENTO AUTOMÁTICO INTELIGENTE
+        # PROCESAR IMÁGENES PARA ML
         try:
             import cv2
             for imagen_facial in imagenes_guardadas:
                 img = cv2.imread(imagen_facial.ruta_archivo)
                 if img is not None:
                     imagenes_procesadas.append(img)
+                    # Actualizar dimensiones
+                    imagen_facial.alto = img.shape[0]
+                    imagen_facial.ancho = img.shape[1]
 
-            # Añadir al modelo ML
-            if imagenes_procesadas:
-                training_result = ml_service.add_new_person(usuario_id, imagenes_procesadas)
-
-                response_data = {
-                    "usuario_id": usuario_id,
-                    "imagenes_añadidas": len(imagenes_guardadas),
-                    "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
-                    "ml_training_status": training_result.get("status", "unknown"),
-                    "ml_message": training_result.get("message", ""),
-                    "model_updated": training_result.get("status") == "added_incremental"
-                }
-
-                print(f"🤖 Resultado ML (imágenes adicionales): {training_result.get('message', 'Sin mensaje')}")
-            else:
-                response_data = {
-                    "usuario_id": usuario_id,
-                    "imagenes_añadidas": len(imagenes_guardadas),
-                    "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
-                    "ml_training_status": "no_processed",
-                    "ml_message": "No se procesaron imágenes para ML"
-                }
+            db.commit()
+            print(f"[SUCCESS] {len(imagenes_procesadas)} imágenes nuevas procesadas para ML")
 
         except Exception as e:
-            print(f"⚠️ Error en procesamiento ML: {e}")
+            print(f"[WARNING] Error procesando imágenes: {e}")
 
-            response_data = {
-                "usuario_id": usuario_id,
-                "imagenes_añadidas": len(imagenes_guardadas),
-                "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
-                "ml_training_status": "error",
-                "ml_message": f"Error en entrenamiento: {str(e)}"
-            }
+        # ENTRENAMIENTO ML AL AÑADIR IMÁGENES (NO FALLAR OPERACIÓN)
+        ml_result = {
+            "ml_training_status": "not_attempted",
+            "ml_message": "No se procesaron imágenes para ML",
+            "model_updated": False
+        }
+
+        if imagenes_procesadas:
+            try:
+                print(f"[ML] Intentando actualizar modelo para usuario {usuario_id}")
+                training_result = ml_service.add_new_person(usuario_id, imagenes_procesadas)
+
+                ml_result = {
+                    "ml_training_status": training_result.get("status", "unknown"),
+                    "ml_message": training_result.get("message", "Sin mensaje"),
+                    "model_updated": training_result.get("status") in [
+                        "added_incremental",
+                        "trained_from_database"
+                    ]
+                }
+
+                print(f"[ML] Resultado: {training_result.get('message', 'Completado')}")
+
+                # IMPORTANTE: Guardar características en BD
+                try:
+                    from models.database_models import CaracteristicasFaciales
+
+                    print(f"[DB] Guardando características nuevas en BD para usuario {usuario_id}")
+
+                    for i, (imagen_facial, img_original) in enumerate(zip(imagenes_guardadas, imagenes_procesadas)):
+                        try:
+                            # Extraer características usando las imágenes ORIGINALES
+                            eigenfaces_features = ml_service.eigenfaces_service.extract_features(
+                                img_original) if ml_service.eigenfaces_service.is_trained else None
+                            lbp_features = ml_service.lbp_service.extract_lbp_features(
+                                img_original) if ml_service.lbp_service.is_trained else None
+
+                            # Crear nuevo registro de características
+                            caracteristicas = CaracteristicasFaciales(
+                                usuario_id=usuario_id,
+                                imagen_id=imagen_facial.id,
+                                eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
+                                lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
+                                algoritmo_version="2.0",
+                                calidad_deteccion=85
+                            )
+                            db.add(caracteristicas)
+                            print(f"[DB] Características creadas para nueva imagen {imagen_facial.id}")
+
+                        except Exception as e:
+                            print(f"[WARNING] Error extrayendo características para imagen {imagen_facial.id}: {e}")
+                            continue
+
+                    db.commit()
+                    print(f"[SUCCESS] Características guardadas en BD para imágenes nuevas")
+
+                except Exception as e:
+                    print(f"[WARNING] Error guardando características en BD: {e}")
+
+            except Exception as e:
+                print(f"[WARNING] Error en entrenamiento ML (imágenes añadidas exitosamente): {e}")
+                ml_result = {
+                    "ml_training_status": "error",
+                    "ml_message": f"Error ML: {str(e)}",
+                    "model_updated": False
+                }
+
+        # Respuesta siempre exitosa
+        response_data = {
+            "usuario_id": usuario_id,
+            "imagenes_añadidas": len(imagenes_guardadas),
+            "total_imagenes": imagenes_existentes + len(imagenes_guardadas),
+            **ml_result  # Incluir resultado ML
+        }
 
         return ResponseWithData(
             success=True,
