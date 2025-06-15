@@ -40,80 +40,114 @@ class LBPService:
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Preprocesa una imagen para el algoritmo LBP
-        IMPORTANTE: Mantener consistencia con eigenfaces
+        CORREGIDO: Preprocesa imagen para LBP con validación robusta
         """
-        print(f"🔧 LBP preprocess input: {image.shape}")
+        print(f"🔧 LBP preprocess input: {image.shape}, dtype: {image.dtype}")
 
-        # Convertir a escala de grises si es necesario
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            print(f"🔧 Convertida a escala de grises: {image.shape}")
-        elif len(image.shape) == 1:
-            # Si recibimos un vector 1D, intentar reformatear
-            size = int(np.sqrt(image.shape[0]))
-            if size * size == image.shape[0]:
-                image = image.reshape(size, size)
-                print(f"🔧 Vector 1D reformateado: {image.shape}")
+        processed = image.copy()
+
+        # Manejar diferentes tipos de entrada
+        if len(processed.shape) == 1:
+            # Vector 1D - reformatear
+            target_pixels = self.image_size[0] * self.image_size[1]
+            if processed.shape[0] == target_pixels:
+                processed = processed.reshape(self.image_size)
+                print(f"🔧 Vector 1D reformateado: {processed.shape}")
             else:
-                raise ValueError(f"Vector 1D no puede ser reformateado: {image.shape}")
+                size = int(np.sqrt(processed.shape[0]))
+                if size * size == processed.shape[0]:
+                    processed = processed.reshape(size, size)
+                    print(f"🔧 Vector 1D a cuadrado: {processed.shape}")
+                else:
+                    raise ValueError(f"Vector 1D no compatible: {processed.shape}")
 
-        # Redimensionar a tamaño estándar (MISMO que eigenfaces)
-        image = cv2.resize(image, self.image_size, interpolation=cv2.INTER_LANCZOS4)
-        print(f"🔧 Redimensionada: {image.shape}")
+        elif len(processed.shape) == 3:
+            # Imagen color
+            processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            print(f"🔧 Convertida a escala de grises: {processed.shape}")
+
+        # Asegurar que sea 2D
+        if len(processed.shape) != 2:
+            raise ValueError(f"Error: imagen debe ser 2D, recibida: {processed.shape}")
+
+        # Redimensionar a tamaño estándar
+        if processed.shape != self.image_size:
+            processed = cv2.resize(processed, self.image_size, interpolation=cv2.INTER_LANCZOS4)
+            print(f"🔧 Redimensionada: {processed.shape}")
 
         # Aplicar filtro gaussiano
-        image = cv2.GaussianBlur(image, (3, 3), 0)
+        processed = cv2.GaussianBlur(processed, (3, 3), 0)
 
-        # Ecualización adaptiva
+        # Ecualización adaptiva para LBP
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        image = clahe.apply(image)
+        processed = clahe.apply(processed)
 
-        print(f"✅ LBP preprocessing completado: {image.shape}")
-        return image
+        # Asegurar tipo uint8 para LBP
+        if processed.dtype != np.uint8:
+            if processed.max() <= 1.0:
+                processed = (processed * 255).astype(np.uint8)
+            else:
+                processed = processed.astype(np.uint8)
+
+        print(f"✅ LBP preprocessing completado: {processed.shape}, dtype={processed.dtype}")
+        return processed
 
     def extract_lbp_features(self, image: np.ndarray) -> np.ndarray:
         """
-        Extrae características LBP de una imagen
-        IMPORTANTE: Asegurar que la imagen sea 2D
+        CORREGIDO: Extrae características LBP con manejo robusto de dimensiones
         """
-        print(f"🔍 LBP input shape: {image.shape}")
+        print(f"🔍 LBP extract_lbp_features input: {image.shape}, dtype: {image.dtype}")
 
         # CRÍTICO: Asegurar que la imagen sea 2D
-        if len(image.shape) == 3:
-            # Si es 3D (color), convertir a escala de grises
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            print(f"🔧 Convertida a escala de grises: {image.shape}")
-        elif len(image.shape) == 1:
-            # Si es 1D (vector), intentar reformatear
-            print(f"⚠️ Imagen 1D detectada, shape: {image.shape}")
-            # Intentar formar una imagen cuadrada
-            size = int(np.sqrt(image.shape[0]))
-            if size * size == image.shape[0]:
-                image = image.reshape(size, size)
-                print(f"🔧 Reformateada a 2D: {image.shape}")
+        processed_image = image.copy()
+
+        if len(processed_image.shape) == 1:
+            # Vector 1D - intentar reformatear
+            target_pixels = self.image_size[0] * self.image_size[1]
+
+            if processed_image.shape[0] == target_pixels:
+                processed_image = processed_image.reshape(self.image_size)
+                print(f"🔧 Vector 1D reformateado a image_size: {processed_image.shape}")
             else:
-                raise ValueError(f"No se puede convertir vector 1D {image.shape} a imagen 2D")
+                # Intentar cuadrado perfecto
+                size = int(np.sqrt(processed_image.shape[0]))
+                if size * size == processed_image.shape[0]:
+                    processed_image = processed_image.reshape(size, size)
+                    print(f"🔧 Vector 1D reformateado a cuadrado: {processed_image.shape}")
+                else:
+                    raise ValueError(
+                        f"Vector 1D {processed_image.shape} no compatible con LBP. Esperado: {target_pixels} píxeles")
 
-        # Asegurar que ahora sea 2D
-        if len(image.shape) != 2:
-            raise ValueError(f"La imagen debe ser 2D, recibida: {image.shape}")
+        elif len(processed_image.shape) == 3:
+            # Imagen color - convertir a escala de grises
+            processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2GRAY)
+            print(f"🔧 Convertida a escala de grises: {processed_image.shape}")
 
-        print(f"✅ Imagen 2D confirmada: {image.shape}")
+        # Verificar que ahora sea 2D
+        if len(processed_image.shape) != 2:
+            raise ValueError(f"LBP requiere imagen 2D, recibida: {processed_image.shape}")
 
-        # Procesar con LBP
-        processed_image = self.preprocess_image(image)
-        print(f"🔧 Imagen preprocesada shape: {processed_image.shape}")
+        print(f"✅ Imagen 2D confirmada: {processed_image.shape}")
+
+        # Aplicar preprocesamiento específico de LBP si no está ya procesada
+        if not (processed_image.dtype == np.uint8 and processed_image.shape == self.image_size):
+            processed_image = self.preprocess_image(processed_image)
+            print(f"🔧 Preprocesamiento LBP aplicado: {processed_image.shape}")
 
         # Calcular LBP
-        lbp_image = local_binary_pattern(
-            processed_image,
-            self.n_points,
-            self.radius,
-            method=self.method
-        )
-
-        print(f"🔍 LBP calculado shape: {lbp_image.shape}")
+        try:
+            lbp_image = local_binary_pattern(
+                processed_image,
+                self.n_points,
+                self.radius,
+                method=self.method
+            )
+            print(f"✅ LBP calculado: shape={lbp_image.shape}")
+        except Exception as e:
+            print(f"❌ Error calculando LBP: {e}")
+            print(f"   Parámetros: radius={self.radius}, n_points={self.n_points}, method={self.method}")
+            print(f"   Imagen: shape={processed_image.shape}, dtype={processed_image.dtype}")
+            raise
 
         # Dividir en grilla y calcular histogramas
         height, width = lbp_image.shape
@@ -129,6 +163,8 @@ class LBPService:
                 end_col = (j + 1) * cell_width
 
                 cell = lbp_image[start_row:end_row, start_col:end_col]
+
+                # Calcular histograma
                 n_bins = self.n_points + 2
                 hist, _ = np.histogram(
                     cell.ravel(),
@@ -138,8 +174,9 @@ class LBPService:
                 )
                 histograms.append(hist)
 
+        # Concatenar todos los histogramas
         feature_vector = np.concatenate(histograms)
-        print(f"✅ LBP features shape: {feature_vector.shape}")
+        print(f"✅ LBP features generados: shape={feature_vector.shape}")
 
         return feature_vector
 

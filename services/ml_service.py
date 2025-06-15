@@ -51,32 +51,61 @@ class MLService:
         self.storage_path = "storage/embeddings/"
         os.makedirs(self.storage_path, exist_ok=True)
 
+        from .image_preprocessor import ImagePreprocessor
+        self.preprocessor = ImagePreprocessor(target_size=(100, 100))
+        print(f"[INIT] ImagePreprocessor inicializado: {type(self.preprocessor)}")
+
     def preprocess_image_for_training(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Preprocesa una imagen para entrenamiento
-
-        Args:
-            image: Imagen original
-
-        Returns:
-            Imagen preprocesada del rostro o None si no se detecta rostro
+        CORREGIDO: Preprocesa imagen de manera ROBUSTA para entrenamiento
         """
-        # Detectar rostros
-        faces = self.face_detector.detect_faces(image)
+        try:
+            print(f"🔧 Preprocessing para entrenamiento: {image.shape}")
 
-        if not faces:
+            # PASO 1: Validar imagen
+            if image is None or image.size == 0:
+                print(f"❌ Imagen inválida")
+                return None
+
+            # PASO 2: Detectar rostros (opcional, con fallback)
+            try:
+                faces = self.face_detector.detect_faces(image)
+
+                if faces:
+                    # Obtener el rostro más grande
+                    largest_face = self.face_detector.get_largest_face(faces)
+                    face_roi = self.face_detector.extract_face_roi(image, largest_face)
+                    print(f"✅ Rostro detectado y extraído: {face_roi.shape}")
+
+                    # Procesar ROI del rostro
+                    processed_face = self.preprocessor.preprocess_for_ml(face_roi, "both")
+                    return processed_face
+                else:
+                    print(f"⚠️ No se detectaron rostros, usando imagen completa")
+                    # FALLBACK: Usar imagen completa
+                    processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                    return processed_face
+
+            except Exception as e:
+                print(f"⚠️ Error en detección de rostros: {e}")
+                # FALLBACK: Usar imagen completa
+                processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                return processed_face
+
+        except Exception as e:
+            print(f"❌ Error crítico en preprocesamiento: {e}")
+            print(f"   Input shape: {image.shape if image is not None else 'None'}")
+
+            # ÚLTIMO FALLBACK: Intentar procesamiento básico
+            try:
+                if image is not None and image.size > 0:
+                    basic_processed = self.preprocessor.preprocess_for_ml(image, "both")
+                    print(f"🔄 Fallback exitoso: {basic_processed.shape}")
+                    return basic_processed
+            except Exception as e2:
+                print(f"❌ Fallback también falló: {e2}")
+
             return None
-
-        # Obtener el rostro más grande
-        largest_face = self.face_detector.get_largest_face(faces)
-
-        # Extraer ROI del rostro
-        face_roi = self.face_detector.extract_face_roi(image, largest_face)
-
-        # Mejorar la imagen
-        enhanced_face = self.face_detector.enhance_face_image(face_roi)
-
-        return enhanced_face
 
     def train_models(self, images_by_person: Dict[int, List[np.ndarray]]) -> Dict[str, Any]:
         """
@@ -137,12 +166,12 @@ class MLService:
 
     def _save_characteristics_to_db(self, images_by_person: Dict[int, List[np.ndarray]]):
         """
-        Guarda características faciales usando LAS IMÁGENES ORIGINALES
+        CORREGIDO: Guarda características usando preprocesamiento consistente
         """
         from config.database import SessionLocal
         from models.database_models import CaracteristicasFaciales, ImagenFacial
 
-        print("💾 INICIANDO GUARDADO DE CARACTERÍSTICAS EN BD")
+        print("💾 GUARDANDO CARACTERÍSTICAS CON PREPROCESAMIENTO MEJORADO")
 
         db = SessionLocal()
         try:
@@ -159,71 +188,99 @@ class MLService:
                 ).all()
 
                 if not db_images:
+                    print(f"   ⚠️ No se encontraron imágenes en BD para usuario {person_id}")
                     continue
 
                 images_to_process = min(len(images), len(db_images))
 
                 for i in range(images_to_process):
-                    original_image = images[i]  # Imagen original 3D/2D
+                    original_image = images[i]  # Imagen original
                     db_image = db_images[i]
 
                     try:
-                        print(f"   🔍 Imagen original shape: {original_image.shape}")
+                        print(f"   📷 Procesando imagen {db_image.id}: {original_image.shape}")
 
-                        # ⚡ CRÍTICO: Usar la imagen ORIGINAL para ambos algoritmos
-                        # Cada servicio debe hacer su propio preprocesamiento
+                        # ✅ CRÍTICO: Usar preprocesamiento específico para cada algoritmo
 
-                        # Eigenfaces - usa su propio preprocesamiento
-                        print(f"   📐 Extrayendo Eigenfaces...")
-                        eigenfaces_features = self.eigenfaces_service.extract_features(original_image)
-                        print(f"   ✅ Eigenfaces OK: {eigenfaces_features.shape}")
-
-                        # LBP - usa su propio preprocesamiento desde la imagen ORIGINAL
-                        print(f"   🔍 Extrayendo LBP...")
-                        lbp_features = self.lbp_service.extract_lbp_features(original_image)
-                        print(f"   ✅ LBP OK: {lbp_features.shape}")
-
-                        # Verificar características existentes
-                        existing = db.query(CaracteristicasFaciales).filter(
-                            CaracteristicasFaciales.imagen_id == db_image.id
-                        ).first()
-
-                        if existing:
-                            existing.eigenfaces_vector = eigenfaces_features.tolist()
-                            existing.lbp_histogram = lbp_features.tolist()
-                            existing.fecha_procesamiento = datetime.now()
-                        else:
-                            caracteristicas = CaracteristicasFaciales(
-                                usuario_id=person_id,
-                                imagen_id=db_image.id,
-                                eigenfaces_vector=eigenfaces_features.tolist(),
-                                lbp_histogram=lbp_features.tolist(),
-                                algoritmo_version="2.0",
-                                calidad_deteccion=85
+                        # Para Eigenfaces - necesita float64 normalizada [0,1]
+                        try:
+                            img_for_eigenfaces = self.preprocessor.preprocess_for_ml(
+                                original_image.copy(), "eigenfaces"
                             )
-                            db.add(caracteristicas)
+                            eigenfaces_features = self.eigenfaces_service.extract_features(img_for_eigenfaces)
+                            print(f"   ✅ Eigenfaces: {eigenfaces_features.shape}")
+                        except Exception as e:
+                            print(f"   ❌ Error Eigenfaces: {e}")
+                            eigenfaces_features = None
 
-                        characteristics_saved += 1
-                        print(f"   ✅ Características guardadas")
+                        # Para LBP - necesita uint8 con CLAHE
+                        try:
+                            img_for_lbp = self.preprocessor.preprocess_for_ml(
+                                original_image.copy(), "lbp"
+                            )
+                            lbp_features = self.lbp_service.extract_lbp_features(img_for_lbp)
+                            print(f"   ✅ LBP: {lbp_features.shape}")
+                        except Exception as e:
+                            print(f"   ❌ Error LBP: {e}")
+                            lbp_features = None
+
+                        # Solo guardar si al menos uno de los algoritmos funcionó
+                        if eigenfaces_features is not None or lbp_features is not None:
+                            # Verificar si ya existen características para esta imagen
+                            existing = db.query(CaracteristicasFaciales).filter(
+                                CaracteristicasFaciales.imagen_id == db_image.id
+                            ).first()
+
+                            if existing:
+                                # Actualizar existente
+                                if eigenfaces_features is not None:
+                                    existing.eigenfaces_vector = eigenfaces_features.tolist()
+                                if lbp_features is not None:
+                                    existing.lbp_histogram = lbp_features.tolist()
+                                existing.fecha_procesamiento = datetime.now()
+                                existing.algoritmo_version = "2.1"  # Versión corregida
+                                print(f"   🔄 Características actualizadas para imagen {db_image.id}")
+                            else:
+                                # Crear nuevo registro
+                                caracteristicas = CaracteristicasFaciales(
+                                    usuario_id=person_id,
+                                    imagen_id=db_image.id,
+                                    eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
+                                    lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
+                                    algoritmo_version="2.1",  # Versión corregida
+                                    calidad_deteccion=90
+                                )
+                                db.add(caracteristicas)
+                                print(f"   ✅ Características creadas para imagen {db_image.id}")
+
+                            characteristics_saved += 1
+                        else:
+                            error_msg = f"No se pudieron extraer características de imagen {db_image.id}"
+                            print(f"   ❌ {error_msg}")
+                            errors.append(error_msg)
 
                     except Exception as e:
-                        error_msg = f"Error en imagen {db_image.id}: {str(e)}"
+                        error_msg = f"Error procesando imagen {db_image.id}: {str(e)}"
                         print(f"   ❌ {error_msg}")
                         errors.append(error_msg)
                         continue
 
+            # Commit solo si hay características guardadas
             if characteristics_saved > 0:
                 db.commit()
-                print(f"✅ {characteristics_saved} características guardadas en BD")
+                print(f"✅ {characteristics_saved} características guardadas exitosamente en BD")
 
             if errors:
-                print(f"\n⚠️ ERRORES ({len(errors)}):")
-                for error in errors[:3]:
+                print(f"\n⚠️ ERRORES ENCONTRADOS ({len(errors)}):")
+                for error in errors[:5]:  # Mostrar solo los primeros 5
                     print(f"   • {error}")
+                if len(errors) > 5:
+                    print(f"   • ... y {len(errors) - 5} errores más")
 
         except Exception as e:
-            print(f"❌ ERROR CRÍTICO: {str(e)}")
+            print(f"❌ ERROR CRÍTICO guardando características: {str(e)}")
             db.rollback()
+            raise
         finally:
             db.close()
 
@@ -532,68 +589,127 @@ class MLService:
 
     def recognize_face(self, image: np.ndarray, method: str = "hybrid") -> Dict[str, Any]:
         """
-        Reconoce un rostro usando el método especificado
-
-        Args:
-            image: Imagen a procesar
-            method: Método a usar ("hybrid", "eigenfaces", "lbp", "voting")
-
-        Returns:
-            Diccionario con resultado del reconocimiento
+        CORREGIDO: Reconoce un rostro usando el método especificado con manejo robusto
         """
         if not self.is_trained:
             raise ValueError("El modelo no ha sido entrenado")
 
-        # Preprocesar imagen
-        processed_face = self.preprocess_image_for_training(image)
+        print(f"🔍 Iniciando reconocimiento con método: {method}")
+        print(f"🔍 Imagen entrada: {image.shape}, dtype: {image.dtype}")
 
-        if processed_face is None:
+        # PASO 1: Preprocesar imagen de manera robusta
+        try:
+            processed_face = self.preprocess_image_for_training(image)
+
+            if processed_face is None:
+                return {
+                    "recognized": False,
+                    "person_id": None,
+                    "confidence": 0.0,
+                    "error": "No se pudo procesar la imagen",
+                    "method": method,
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            print(f"✅ Imagen preprocesada: {processed_face.shape}, dtype: {processed_face.dtype}")
+
+        except Exception as e:
+            print(f"❌ Error en preprocesamiento: {e}")
             return {
                 "recognized": False,
                 "person_id": None,
                 "confidence": 0.0,
-                "error": "No se detectó rostro en la imagen",
+                "error": f"Error en preprocesamiento: {str(e)}",
+                "method": method,
                 "timestamp": datetime.now().isoformat()
             }
 
-        # Realizar reconocimiento según el método
-        if method == "eigenfaces":
-            return self._recognize_eigenfaces_only(processed_face)
-        elif method == "lbp":
-            return self._recognize_lbp_only(processed_face)
-        elif method == "voting":
-            return self._recognize_voting(processed_face)
-        else:  # hybrid (default)
-            return self._recognize_hybrid(processed_face)
+        # PASO 2: Realizar reconocimiento según el método
+        try:
+            if method == "eigenfaces":
+                return self._recognize_eigenfaces_only(processed_face)
+            elif method == "lbp":
+                return self._recognize_lbp_only(processed_face)
+            elif method == "voting":
+                return self._recognize_voting(processed_face)
+            else:  # hybrid (default)
+                return self._recognize_hybrid(processed_face)
+
+        except Exception as e:
+            print(f"❌ Error en reconocimiento {method}: {e}")
+            return {
+                "recognized": False,
+                "person_id": None,
+                "confidence": 0.0,
+                "error": f"Error en algoritmo {method}: {str(e)}",
+                "method": method,
+                "timestamp": datetime.now().isoformat()
+            }
 
     def _recognize_hybrid(self, processed_face: np.ndarray) -> Dict[str, Any]:
         """
-        Reconocimiento híbrido combinando Eigenfaces y LBP
+        CORREGIDO: Reconocimiento híbrido con manejo de errores independiente
         """
-        # Reconocimiento con Eigenfaces
-        eigen_person_id, eigen_confidence, eigen_details = self.eigenfaces_service.recognize_face(processed_face)
+        print(f"🔍 Reconocimiento híbrido con imagen: {processed_face.shape}")
 
-        # Reconocimiento con LBP
-        lbp_person_id, lbp_confidence, lbp_details = self.lbp_service.recognize_face(processed_face)
+        results = {
+            "eigenfaces": None,
+            "lbp": None,
+            "errors": []
+        }
+
+        # Intentar Eigenfaces
+        try:
+            # Preparar imagen específicamente para eigenfaces
+            img_for_eigen = self.preprocessor.preprocess_for_ml(processed_face.copy(), "eigenfaces")
+            eigen_person_id, eigen_confidence, eigen_details = self.eigenfaces_service.recognize_face(img_for_eigen)
+            results["eigenfaces"] = (eigen_person_id, eigen_confidence, eigen_details)
+            print(f"✅ Eigenfaces: ID={eigen_person_id}, conf={eigen_confidence:.2f}")
+        except Exception as e:
+            error_msg = f"Error en Eigenfaces: {str(e)}"
+            print(f"❌ {error_msg}")
+            results["errors"].append(error_msg)
+            results["eigenfaces"] = (-1, 0.0, {"error": error_msg})
+
+        # Intentar LBP
+        try:
+            # Preparar imagen específicamente para LBP
+            img_for_lbp = self.preprocessor.preprocess_for_ml(processed_face.copy(), "lbp")
+            lbp_person_id, lbp_confidence, lbp_details = self.lbp_service.recognize_face(img_for_lbp)
+            results["lbp"] = (lbp_person_id, lbp_confidence, lbp_details)
+            print(f"✅ LBP: ID={lbp_person_id}, conf={lbp_confidence:.2f}")
+        except Exception as e:
+            error_msg = f"Error en LBP: {str(e)}"
+            print(f"❌ {error_msg}")
+            results["errors"].append(error_msg)
+            results["lbp"] = (-1, 0.0, {"error": error_msg})
 
         # Combinar resultados
-        if self.combination_method == "weighted_average":
-            result = self._combine_weighted_average(
-                (eigen_person_id, eigen_confidence, eigen_details),
-                (lbp_person_id, lbp_confidence, lbp_details)
-            )
-        elif self.combination_method == "voting":
-            result = self._combine_voting(
-                (eigen_person_id, eigen_confidence, eigen_details),
-                (lbp_person_id, lbp_confidence, lbp_details)
-            )
-        else:  # cascade
-            result = self._combine_cascade(
-                (eigen_person_id, eigen_confidence, eigen_details),
-                (lbp_person_id, lbp_confidence, lbp_details)
-            )
+        eigen_result = results["eigenfaces"]
+        lbp_result = results["lbp"]
 
-        return result
+        # Si ambos fallaron
+        if eigen_result[0] == -1 and lbp_result[0] == -1:
+            return {
+                "recognized": False,
+                "person_id": None,
+                "confidence": 0.0,
+                "method": "hybrid",
+                "errors": results["errors"],
+                "details": {
+                    "eigenfaces": eigen_result[2],
+                    "lbp": lbp_result[2]
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Combinar con promedio ponderado
+        if self.combination_method == "weighted_average":
+            return self._combine_weighted_average(eigen_result, lbp_result)
+        elif self.combination_method == "voting":
+            return self._combine_voting_safe(eigen_result, lbp_result)
+        else:  # cascade
+            return self._combine_cascade(eigen_result, lbp_result)
 
     def _recognize_eigenfaces_only(self, processed_face: np.ndarray) -> Dict[str, Any]:
         """
@@ -665,44 +781,88 @@ class MLService:
 
     def _combine_weighted_average(self, eigen_result: Tuple, lbp_result: Tuple) -> Dict[str, Any]:
         """
-        Combina resultados usando promedio ponderado
+        CORREGIDO: Combina resultados usando promedio ponderado con manejo de errores
         """
         eigen_person_id, eigen_confidence, eigen_details = eigen_result
         lbp_person_id, lbp_confidence, lbp_details = lbp_result
 
-        # Si ambos algoritmos identifican la misma persona
-        if eigen_person_id == lbp_person_id and eigen_person_id != -1:
-            final_person_id = eigen_person_id
-            final_confidence = (eigen_confidence * self.eigenfaces_weight +
-                                lbp_confidence * self.lbp_weight)
-            consensus = True
-        else:
-            # Usar el algoritmo con mayor confianza ponderada
-            eigen_weighted = eigen_confidence * self.eigenfaces_weight
-            lbp_weighted = lbp_confidence * self.lbp_weight
+        print(
+            f"🔄 Combinando: Eigen(ID={eigen_person_id}, conf={eigen_confidence:.2f}), LBP(ID={lbp_person_id}, conf={lbp_confidence:.2f})")
 
-            if eigen_weighted > lbp_weighted:
-                final_person_id = eigen_person_id
-                final_confidence = eigen_weighted
-            else:
-                final_person_id = lbp_person_id
-                final_confidence = lbp_weighted
+        # Manejar casos donde uno o ambos algoritmos fallaron
+        valid_eigen = eigen_person_id != -1
+        valid_lbp = lbp_person_id != -1
 
+        if not valid_eigen and not valid_lbp:
+            # Ambos fallaron
+            return {
+                "recognized": False,
+                "person_id": None,
+                "confidence": 0.0,
+                "method": "weighted_average",
+                "consensus": False,
+                "details": {
+                    "eigenfaces": eigen_details,
+                    "lbp": lbp_details,
+                    "combination_status": "both_failed"
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+
+        elif not valid_eigen:
+            # Solo LBP funcionó
+            final_person_id = lbp_person_id
+            final_confidence = lbp_confidence * 0.8  # Penalizar por falta de consenso
+            combination_status = "lbp_only"
             consensus = False
+
+        elif not valid_lbp:
+            # Solo Eigenfaces funcionó
+            final_person_id = eigen_person_id
+            final_confidence = eigen_confidence * 0.8  # Penalizar por falta de consenso
+            combination_status = "eigenfaces_only"
+            consensus = False
+
+        else:
+            # Ambos funcionaron
+            if eigen_person_id == lbp_person_id:
+                # Consenso - misma persona identificada
+                final_person_id = eigen_person_id
+                final_confidence = (eigen_confidence * self.eigenfaces_weight +
+                                    lbp_confidence * self.lbp_weight)
+                consensus = True
+                combination_status = "consensus"
+            else:
+                # Sin consenso - usar el de mayor confianza ponderada
+                eigen_weighted = eigen_confidence * self.eigenfaces_weight
+                lbp_weighted = lbp_confidence * self.lbp_weight
+
+                if eigen_weighted > lbp_weighted:
+                    final_person_id = eigen_person_id
+                    final_confidence = eigen_weighted * 0.9  # Penalizar ligeramente por falta de consenso
+                else:
+                    final_person_id = lbp_person_id
+                    final_confidence = lbp_weighted * 0.9
+
+                consensus = False
+                combination_status = "no_consensus"
 
         return {
             "recognized": final_person_id != -1 and final_confidence >= self.confidence_threshold,
             "person_id": final_person_id if final_person_id != -1 else None,
-            "confidence": final_confidence,
+            "confidence": round(final_confidence, 2),
             "method": "weighted_average",
             "consensus": consensus,
+            "combination_status": combination_status,
             "weights": {
                 "eigenfaces": self.eigenfaces_weight,
                 "lbp": self.lbp_weight
             },
             "details": {
                 "eigenfaces": eigen_details,
-                "lbp": lbp_details
+                "lbp": lbp_details,
+                "valid_eigenfaces": valid_eigen,
+                "valid_lbp": valid_lbp
             },
             "timestamp": datetime.now().isoformat()
         }
@@ -1009,3 +1169,15 @@ class MLService:
             needed = requirements["min_required"] - requirements["users_with_images"]
             return f"⏳ Se necesitan {needed} usuarios más con imágenes para entrenar"
 
+
+def __init__(self):
+    """
+    Inicializa el servicio de ML con algoritmos híbridos
+    """
+    # ... código existente ...
+
+    # ✅ AÑADIR: Preprocesador unificado
+    from .image_preprocessor import ImagePreprocessor
+    self.preprocessor = ImagePreprocessor(target_size=(100, 100))
+
+    # ... resto del código existente ...

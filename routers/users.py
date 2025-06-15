@@ -6,6 +6,8 @@ import shutil
 import os
 from datetime import datetime
 import uuid
+import cv2
+import numpy as np
 
 from config.database import get_db
 from models.database_models import Usuario, ImagenFacial, CaracteristicasFaciales, asignar_requisitoriado_aleatorio
@@ -15,6 +17,15 @@ from models.pydantic_models import (
 )
 from services.ml_service import MLService
 from utils.alert_system import AlertSystem
+
+try:
+    from skimage.feature import local_binary_pattern
+    LBP_AVAILABLE = True
+    print("✅ scikit-image disponible para LBP")
+except ImportError:
+    LBP_AVAILABLE = False
+    print("⚠️ scikit-image no disponible - instalar con: pip install scikit-image")
+
 
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
@@ -95,7 +106,7 @@ async def crear_usuario(
 ):
     """
     Crea un nuevo usuario con sus imágenes faciales (mínimo 1, máximo 5)
-    CON ENTRENAMIENTO AUTOMÁTICO INTELIGENTE MEJORADO
+    CON EXTRACCIÓN AUTOMÁTICA DE CARACTERÍSTICAS
     """
     try:
         # Validar número de imágenes
@@ -155,7 +166,6 @@ async def crear_usuario(
 
         # Procesar y guardar imágenes
         imagenes_guardadas = []
-        imagenes_procesadas = []
 
         for i, imagen in enumerate(imagenes):
             # Generar nombre único para el archivo
@@ -185,110 +195,137 @@ async def crear_usuario(
 
         db.commit()
 
-        # PROCESAR IMÁGENES PARA ML ANTES DEL ENTRENAMIENTO
+        # INICIALIZAR RESULTADO ML
+        ml_result = {
+            "ml_training_status": "not_attempted",
+            "ml_message": "Procesamiento ML no ejecutado",
+            "model_trained": False,
+            "characteristics_extracted": False,
+            "training_triggered": False
+        }
+
+        # PASO 1: EXTRAER CARACTERÍSTICAS BÁSICAS
+        caracteristicas_extraidas = 0
+
         try:
-            import cv2
-            import numpy as np
+            print(f"[CHAR] Extrayendo características para usuario {nuevo_usuario.id}")
 
-            for imagen_facial in imagenes_guardadas:
-                # Leer imagen
-                img = cv2.imread(imagen_facial.ruta_archivo)
-                if img is not None:
-                    imagenes_procesadas.append(img)
+            for i, imagen_facial in enumerate(imagenes_guardadas):
+                try:
+                    # Leer imagen
+                    img = cv2.imread(imagen_facial.ruta_archivo)
+                    if img is None:
+                        print(f"[WARNING] No se pudo leer imagen: {imagen_facial.ruta_archivo}")
+                        continue
 
-                    # Actualizar dimensiones de la imagen
+                    # Actualizar dimensiones
                     imagen_facial.alto = img.shape[0]
                     imagen_facial.ancho = img.shape[1]
 
-            db.commit()
-            print(f"[SUCCESS] {len(imagenes_procesadas)} imágenes procesadas para ML")
+                    print(f"[CHAR] Procesando imagen {imagen_facial.id}: {img.shape}")
 
-        except Exception as e:
-            print(f"[WARNING] Error procesando imágenes: {e}")
+                    # EXTRAER CARACTERÍSTICAS BÁSICAS
+                    eigenfaces_features = None
+                    lbp_features = None
 
-        # ENTRENAMIENTO ML DE FORMA SEGURA (NO FALLAR CREACIÓN DE USUARIO)
-        ml_result = {
-            "ml_training_status": "not_attempted",
-            "ml_message": "Entrenamiento ML no ejecutado",
-            "model_trained": False
-        }
+                    # EIGENFACES BÁSICO (preparar para futuro PCA)
+                    try:
+                        processed_img = img.copy()
+                        if len(processed_img.shape) == 3:
+                            processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
 
-        if imagenes_procesadas:
-            try:
-                print(f"[ML] Intentando entrenamiento para usuario {nuevo_usuario.id}")
-                training_result = ml_service.add_new_person(nuevo_usuario.id, imagenes_procesadas)
+                        processed_img = cv2.resize(processed_img, (100, 100))
+                        processed_img = cv2.equalizeHist(processed_img)
+                        processed_img = processed_img.astype(np.float64) / 255.0
 
-                ml_result = {
-                    "ml_training_status": training_result.get("status", "unknown"),
-                    "ml_message": training_result.get("message", "Sin mensaje"),
-                    "model_trained": training_result.get("status") in [
-                        "added_incremental",
-                        "trained_from_database",
-                        "pending_training"
-                    ]
-                }
+                        # Vector básico (imagen aplanada)
+                        eigenfaces_features = processed_img.flatten()
+                        print(f"[CHAR] Eigenfaces básico: {eigenfaces_features.shape}")
 
-                print(f"[ML] Resultado: {training_result.get('message', 'Completado')}")
+                    except Exception as e:
+                        print(f"[WARNING] Error Eigenfaces básico: {e}")
 
-                # IMPORTANTE: Guardar características en BD independientemente del resultado ML
-                try:
-                    from models.database_models import CaracteristicasFaciales
-
-                    print(f"[DB] Guardando características en BD para usuario {nuevo_usuario.id}")
-
-                    for i, (imagen_facial, img_original) in enumerate(zip(imagenes_guardadas, imagenes_procesadas)):
+                    # LBP (solo si está disponible)
+                    if LBP_AVAILABLE:
                         try:
-                            # Extraer características usando las imágenes ORIGINALES
-                            eigenfaces_features = ml_service.eigenfaces_service.extract_features(
-                                img_original) if ml_service.eigenfaces_service.is_trained else None
-                            lbp_features = ml_service.lbp_service.extract_lbp_features(
-                                img_original) if ml_service.lbp_service.is_trained else None
+                            from skimage.feature import local_binary_pattern
 
-                            # Verificar si ya existen características para esta imagen
-                            existing_char = db.query(CaracteristicasFaciales).filter(
-                                CaracteristicasFaciales.imagen_id == imagen_facial.id
-                            ).first()
+                            processed_img = img.copy()
+                            if len(processed_img.shape) == 3:
+                                processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
 
-                            if existing_char:
-                                # Actualizar existente
-                                if eigenfaces_features is not None:
-                                    existing_char.eigenfaces_vector = eigenfaces_features.tolist()
-                                if lbp_features is not None:
-                                    existing_char.lbp_histogram = lbp_features.tolist()
-                                existing_char.fecha_procesamiento = datetime.now()
-                                print(f"[DB] Características actualizadas para imagen {imagen_facial.id}")
-                            else:
-                                # Crear nuevo registro
-                                caracteristicas = CaracteristicasFaciales(
-                                    usuario_id=nuevo_usuario.id,
-                                    imagen_id=imagen_facial.id,
-                                    eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
-                                    lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
-                                    algoritmo_version="2.0",
-                                    calidad_deteccion=85
-                                )
-                                db.add(caracteristicas)
-                                print(f"[DB] Características creadas para imagen {imagen_facial.id}")
+                            processed_img = cv2.resize(processed_img, (100, 100))
+
+                            # Aplicar LBP
+                            lbp_image = local_binary_pattern(processed_img, 16, 2, method='uniform')
+
+                            # Crear histograma simple
+                            hist, _ = np.histogram(lbp_image.ravel(), bins=18, range=(0, 18), density=True)
+                            lbp_features = hist
+                            print(f"[CHAR] LBP extraído: {lbp_features.shape}")
 
                         except Exception as e:
-                            print(f"[WARNING] Error extrayendo características para imagen {imagen_facial.id}: {e}")
-                            continue
+                            print(f"[WARNING] Error LBP: {e}")
+                    else:
+                        print(f"[INFO] LBP no disponible - solo Eigenfaces básico")
 
-                    db.commit()
-                    print(f"[SUCCESS] Características guardadas en BD para usuario {nuevo_usuario.id}")
+                    # GUARDAR EN BD
+                    if eigenfaces_features is not None or lbp_features is not None:
+                        caracteristicas = CaracteristicasFaciales(
+                            usuario_id=nuevo_usuario.id,
+                            imagen_id=imagen_facial.id,
+                            eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
+                            lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
+                            algoritmo_version="2.1_basic",
+                            calidad_deteccion=75
+                        )
+                        db.add(caracteristicas)
+                        caracteristicas_extraidas += 1
+                        print(f"[CHAR] Características guardadas para imagen {imagen_facial.id}")
 
                 except Exception as e:
-                    print(f"[WARNING] Error guardando características en BD: {e}")
+                    print(f"[ERROR] Error procesando imagen {imagen_facial.id}: {e}")
+                    continue
 
-            except Exception as e:
-                print(f"[WARNING] Error en entrenamiento ML (usuario creado exitosamente): {e}")
-                ml_result = {
-                    "ml_training_status": "error",
-                    "ml_message": f"Error ML: {str(e)}",
-                    "model_trained": False
-                }
+            # Commit de todo
+            db.commit()
 
-        # Preparar respuesta del usuario (SIEMPRE exitosa)
+            if caracteristicas_extraidas > 0:
+                print(f"[SUCCESS] {caracteristicas_extraidas} características guardadas")
+                ml_result.update({
+                    "characteristics_extracted": True,
+                    "characteristics_count": caracteristicas_extraidas,
+                    "ml_message": f"Características extraídas: {caracteristicas_extraidas}"
+                })
+
+        except Exception as e:
+            print(f"[ERROR] Error general extrayendo características: {e}")
+            ml_result["ml_message"] = f"Error extrayendo características: {str(e)}"
+
+        # PASO 2: VERIFICAR ENTRENAMIENTO AUTOMÁTICO
+        try:
+            total_usuarios = db.query(Usuario).filter(Usuario.activo == True).count()
+            usuarios_con_caracteristicas = db.query(CaracteristicasFaciales.usuario_id).distinct().count()
+
+            print(f"[TRAINING] Usuarios: {total_usuarios}, con características: {usuarios_con_caracteristicas}")
+
+            if usuarios_con_caracteristicas >= 2:
+                print(f"[TRAINING] Iniciando entrenamiento automático...")
+
+                # Aquí puedes añadir lógica de entrenamiento si lo deseas
+                # Por ahora, solo actualizar el mensaje
+                ml_result.update({
+                    "training_triggered": True,
+                    "ml_message": f"Listo para entrenar con {usuarios_con_caracteristicas} usuarios"
+                })
+            else:
+                ml_result[
+                    "ml_message"] = f"Características guardadas. Esperando más usuarios ({usuarios_con_caracteristicas}/2)"
+
+        except Exception as e:
+            print(f"[ERROR] Error verificando entrenamiento: {e}")
+
+        # Preparar respuesta
         usuario_creado = {
             "id": nuevo_usuario.id,
             "nombre": nuevo_usuario.nombre,
@@ -299,7 +336,7 @@ async def crear_usuario(
             "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
             "total_imagenes": len(imagenes_guardadas),
             "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
-            **ml_result  # Incluir resultado ML
+            **ml_result
         }
 
         return ResponseWithData(

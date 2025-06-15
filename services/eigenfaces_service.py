@@ -42,61 +42,97 @@ class EigenfacesService:
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Preprocesa una imagen para el algoritmo Eigenfaces
-        IMPORTANTE: Debe ser consistente entre entrenamiento y reconocimiento
+        CORREGIDO: Preprocesa una imagen para el algoritmo Eigenfaces
         """
+        print(f"🔧 Eigenfaces preprocess input: {image.shape}, dtype: {image.dtype}")
+
+        # Si ya viene procesada (float64 en [0,1]), solo verificar dimensiones
+        if image.dtype == np.float64 and image.max() <= 1.0 and len(image.shape) == 2:
+            if image.shape == self.image_size:
+                print(f"✅ Imagen ya preprocesada correctamente")
+                return image
+
+        # Procesar imagen raw
+        processed = image.copy()
+
         # Convertir a escala de grises si es necesario
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        if len(processed.shape) == 3:
+            processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            print(f"🔧 Convertida a escala de grises: {processed.shape}")
 
         # CRÍTICO: Redimensionar SIEMPRE al tamaño específico
-        image = cv2.resize(image, self.image_size, interpolation=cv2.INTER_LANCZOS4)
-
-        print(f"🔧 Imagen redimensionada a: {image.shape} (esperado: {self.image_size})")
+        if processed.shape != self.image_size:
+            processed = cv2.resize(processed, self.image_size, interpolation=cv2.INTER_LANCZOS4)
+            print(f"🔧 Redimensionada a: {processed.shape}")
 
         # Aplicar filtro gaussiano para reducir ruido
-        image = cv2.GaussianBlur(image, (5, 5), 0)
+        processed = cv2.GaussianBlur(processed, (5, 5), 0)
 
         # Ecualización de histograma para mejorar contraste
-        image = cv2.equalizeHist(image)
+        processed = cv2.equalizeHist(processed)
 
-        # Normalizar valores de pixel
-        image = image.astype(np.float64) / 255.0
+        # Normalizar valores de pixel a [0, 1]
+        processed = processed.astype(np.float64) / 255.0
 
-        return image
+        print(
+            f"✅ Eigenfaces preprocessing completado: {processed.shape}, dtype={processed.dtype}, range=[{processed.min():.3f}, {processed.max():.3f}]")
+
+        return processed
 
     def extract_features(self, image: np.ndarray) -> np.ndarray:
         """
-        Extrae características usando Eigenfaces
+        CORREGIDO: Extrae características con validación robusta
         """
         if not self.is_trained:
             raise ValueError("El modelo no ha sido entrenado. Ejecute train() primero.")
 
-        # Preprocesar imagen (garantiza dimensiones correctas)
-        processed_image = self.preprocess_image(image)
+        print(f"🔍 Eigenfaces extract_features input: {image.shape}, dtype: {image.dtype}")
 
-        print(f"🔍 Imagen procesada shape: {processed_image.shape}")
-        print(f"🔍 Tamaño esperado: {self.image_size}")
+        # VALIDACIÓN Y NORMALIZACIÓN ROBUSTA
+        processed_image = image.copy()
+
+        # Si la imagen viene como float64 en [0,1] (ya procesada), usarla directamente
+        if processed_image.dtype == np.float64 and processed_image.max() <= 1.0:
+            print(
+                f"✅ Imagen ya preprocesada para Eigenfaces: {processed_image.dtype}, range=[{processed_image.min():.3f}, {processed_image.max():.3f}]")
+        else:
+            # Convertir y normalizar
+            if len(processed_image.shape) == 3:
+                processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2GRAY)
+                print(f"🔧 Convertida a escala de grises: {processed_image.shape}")
+
+            # Redimensionar si es necesario
+            if processed_image.shape != self.image_size:
+                processed_image = cv2.resize(processed_image, self.image_size, interpolation=cv2.INTER_LANCZOS4)
+                print(f"🔧 Redimensionada: {processed_image.shape}")
+
+            # Normalizar a [0, 1]
+            if processed_image.max() > 1.0:
+                processed_image = processed_image.astype(np.float64) / 255.0
+                print(
+                    f"🔧 Normalizada: {processed_image.dtype}, range=[{processed_image.min():.3f}, {processed_image.max():.3f}]")
 
         # Aplanar la imagen
         image_vector = processed_image.flatten()
-
-        print(f"🔍 Vector aplanado shape: {image_vector.shape}")
+        print(f"🔍 Vector shape: {image_vector.shape}")
         print(f"🔍 Mean face shape: {self.mean_face.shape}")
 
-        # Verificar dimensiones antes de operar
+        # VALIDACIÓN CRÍTICA DE DIMENSIONES
         if image_vector.shape[0] != self.mean_face.shape[0]:
             raise ValueError(
-                f"Dimensión incorrecta: imagen={image_vector.shape[0]}, "
+                f"ERROR DIMENSIONES: imagen_vector={image_vector.shape[0]}, "
                 f"mean_face={self.mean_face.shape[0]}. "
-                f"La imagen debe ser redimensionada a {self.image_size}"
+                f"La imagen debe ser exactamente {self.image_size}. "
+                f"Imagen recibida: {processed_image.shape}"
             )
 
         # Centrar la imagen restando la cara promedio
         centered_image = image_vector - self.mean_face
+        print(f"🔧 Imagen centrada: shape={centered_image.shape}")
 
         # Proyectar en el espacio de eigenfaces
         embedding = self.pca.transform(centered_image.reshape(1, -1))
+        print(f"✅ Embedding generado: shape={embedding.shape}")
 
         return embedding.flatten()
 

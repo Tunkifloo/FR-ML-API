@@ -25,6 +25,7 @@ alert_system = AlertSystem()
 
 # Configuración
 TEMP_DIR = "storage/temp"
+MAX_FILE_SIZE = 10 * 1024 * 1024
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -104,6 +105,7 @@ def _clean_for_json(self, data):
     else:
         return data
 
+
 @router.post("/identificar", response_model=ResponseWithData, summary="Identificar persona en imagen")
 async def identificar_persona(
         imagen: UploadFile = File(..., description="Imagen a analizar"),
@@ -113,169 +115,196 @@ async def identificar_persona(
         db: Session = Depends(get_db)
 ):
     """
-    Identifica una persona en una imagen usando algoritmos de reconocimiento facial
-
-    - **imagen**: Archivo de imagen a analizar
-    - **algoritmo**: Algoritmo de reconocimiento (hybrid, eigenfaces, lbp, voting)
-    - **incluir_detalles**: Si incluir detalles técnicos del procesamiento
-
-    ⚠️ **IMPORTANTE**: Si se detecta una persona requisitoriada, se generará una alerta de seguridad automáticamente.
+    CORREGIDO: Identificación robusta con manejo de errores mejorado
     """
     temp_file_path = None
 
     try:
-        # Validar archivo
+        print(f"🔍 Iniciando identificación con algoritmo: {algoritmo.value}")
+
+        # PASO 1: Validaciones básicas
         if not validate_image_file(imagen):
             raise HTTPException(
                 status_code=400,
                 detail="El archivo debe ser una imagen válida (jpg, jpeg, png, bmp)"
             )
 
-        # Verificar que el modelo esté entrenado
+        # Verificar tamaño de archivo
+        if imagen.size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El archivo excede el tamaño máximo permitido ({MAX_FILE_SIZE / (1024 * 1024):.1f} MB)"
+            )
+
+        # PASO 2: Verificar modelo entrenado
         if not ml_service.load_models():
             raise HTTPException(
                 status_code=503,
-                detail="El modelo de reconocimiento no está entrenado. Entrene el modelo primero."
+                detail="El modelo de reconocimiento no está entrenado. Entrene el modelo primero usando /api/v1/usuarios/entrenar-modelo"
             )
 
-        # Crear archivo temporal
+        # PASO 3: Guardar archivo temporal
         file_extension = os.path.splitext(imagen.filename)[1]
         temp_filename = f"recognition_{uuid.uuid4().hex}{file_extension}"
         temp_file_path = os.path.join(TEMP_DIR, temp_filename)
 
-        # Guardar imagen temporalmente
-        with open(temp_file_path, "wb") as buffer:
-            content = await imagen.read()
-            buffer.write(content)
+        # Guardar con validación
+        try:
+            with open(temp_file_path, "wb") as buffer:
+                content = await imagen.read()
+                if len(content) == 0:
+                    raise HTTPException(status_code=400, detail="El archivo está vacío")
+                buffer.write(content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error guardando archivo: {str(e)}")
 
-        # Leer imagen con OpenCV
+        # PASO 4: Leer y validar imagen
         img = cv2.imread(temp_file_path)
         if img is None:
-            raise HTTPException(status_code=400, detail="No se pudo procesar la imagen")
+            raise HTTPException(
+                status_code=400,
+                detail="No se pudo leer la imagen. El archivo puede estar corrupto o en un formato no soportado."
+            )
 
-        # Obtener IP del cliente
-        client_ip = None
-        if request:
-            client_ip = request.client.host
+        # Validar dimensiones mínimas
+        if img.shape[0] < 50 or img.shape[1] < 50:
+            raise HTTPException(
+                status_code=400,
+                detail=f"La imagen es demasiado pequeña ({img.shape[1]}x{img.shape[0]}). Mínimo requerido: 50x50 píxeles."
+            )
 
-        # Realizar reconocimiento
+        print(f"✅ Imagen cargada correctamente: {img.shape}, tamaño: {imagen.size} bytes")
+
+        # PASO 5: Realizar reconocimiento con manejo de errores
         start_time = datetime.now()
-        recognition_result = ml_service.recognize_face(img, method=algoritmo.value)
-        end_time = datetime.now()
-        recognition_result = convert_numpy_types(recognition_result)
 
-        processing_time = (end_time - start_time).total_seconds()
+        try:
+            recognition_result = ml_service.recognize_face(img, method=algoritmo.value)
+            end_time = datetime.now()
 
-        # Preparar respuesta base
+            # Convertir tipos numpy a tipos nativos Python
+            recognition_result = convert_numpy_types(recognition_result)
+            processing_time = (end_time - start_time).total_seconds()
+
+            print(f"✅ Reconocimiento completado en {processing_time:.3f}s")
+
+        except Exception as e:
+            print(f"❌ Error en reconocimiento facial: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error procesando la imagen con {algoritmo.value}: {str(e)}"
+            )
+
+        # PASO 6: Preparar respuesta base
         response_data = {
             "reconocido": recognition_result.get("recognized", False),
             "persona_id": recognition_result.get("person_id"),
             "confianza": round(recognition_result.get("confidence", 0.0), 2),
             "metodo": recognition_result.get("method", algoritmo.value),
             "tiempo_procesamiento": round(processing_time, 3),
-            "timestamp": recognition_result.get("timestamp")
+            "timestamp": recognition_result.get("timestamp", datetime.now().isoformat()),
+            "imagen_info": {
+                "dimensiones": f"{img.shape[1]}x{img.shape[0]}",
+                "canales": img.shape[2] if len(img.shape) == 3 else 1,
+                "tamano_bytes": imagen.size
+            }
         }
 
         # Incluir detalles técnicos si se solicita
         if incluir_detalles:
             response_data["detalles_tecnicos"] = convert_numpy_types(recognition_result.get("details", {}))
 
-        # Variables para información de la persona y alerta
+            # Incluir errores si los hay
+            if "errors" in recognition_result:
+                response_data["errores_algoritmos"] = recognition_result["errors"]
+
+        # PASO 7: Obtener información de la persona y manejar alertas
         persona_info = None
         alerta_seguridad = None
 
-        # Si se reconoció una persona, obtener información de la BD
         if response_data["reconocido"] and response_data["persona_id"]:
-            usuario = db.query(Usuario).filter(Usuario.id == response_data["persona_id"]).first()
+            try:
+                usuario = db.query(Usuario).filter(Usuario.id == response_data["persona_id"]).first()
 
-            if usuario:
-                persona_info = {
-                    "id": usuario.id,
-                    "nombre": usuario.nombre,
-                    "apellido": usuario.apellido,
-                    "id_estudiante": usuario.id_estudiante,
-                    "email": usuario.email,
-                    "requisitoriado": usuario.requisitoriado,
-                    "tipo_requisitoria": usuario.tipo_requisitoria
-                }
+                if usuario:
+                    persona_info = {
+                        "id": usuario.id,
+                        "nombre": usuario.nombre,
+                        "apellido": usuario.apellido,
+                        "id_estudiante": usuario.id_estudiante,
+                        "email": usuario.email,
+                        "requisitoriado": usuario.requisitoriado,
+                        "tipo_requisitoria": usuario.tipo_requisitoria
+                    }
 
-                # Si la persona está requisitoriada, generar alerta
-                if usuario.requisitoriado:
-                    alert_info = AlertInfo(
-                        person_id=usuario.id,
-                        person_name=usuario.nombre,
-                        person_lastname=usuario.apellido,
-                        student_id=usuario.id_estudiante,
-                        requisition_type=usuario.tipo_requisitoria,
-                        confidence=response_data["confianza"],
-                        detection_timestamp=datetime.now().isoformat(),
-                        image_path=temp_file_path,
-                        alert_level="",  # Se determinará automáticamente
-                        location="Sistema de Reconocimiento Facial",
-                        additional_info={
-                            "algorithm": algoritmo.value,
-                            "processing_time": processing_time,
-                            "client_ip": client_ip
-                        }
-                    )
+                    # PASO 8: Generar alerta si la persona está requisitoriada
+                    if usuario.requisitoriado:
+                        try:
+                            alert_info = AlertInfo(
+                                person_id=usuario.id,
+                                person_name=usuario.nombre,
+                                person_lastname=usuario.apellido,
+                                student_id=usuario.id_estudiante,
+                                requisition_type=usuario.tipo_requisitoria,
+                                confidence=response_data["confianza"],
+                                detection_timestamp=datetime.now().isoformat(),
+                                image_path=temp_file_path,
+                                alert_level="",  # Se determinará automáticamente
+                                location="Sistema de Reconocimiento Facial",
+                                additional_info={
+                                    "algorithm": algoritmo.value,
+                                    "processing_time": processing_time,
+                                    "client_ip": request.client.host if request else "unknown"
+                                }
+                            )
 
-                    # Generar alerta
-                    alerta_seguridad = alert_system.generate_security_alert(alert_info)
+                            alerta_seguridad = alert_system.generate_security_alert(alert_info)
+                            print(f"🚨 Alerta de seguridad generada para persona requisitoriada")
 
-        # Registrar en historial
-        historial = HistorialReconocimiento(
-            usuario_id=response_data["persona_id"],
-            imagen_consulta_path=temp_file_path,
-            confianza=int(response_data["confianza"]),
-            distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
-            reconocido=response_data["reconocido"],
-            alerta_generada=alerta_seguridad is not None,
-            caracteristicas_consulta=recognition_result.get("details", {}),
-            ip_origen=client_ip
-        )
+                        except Exception as e:
+                            print(f"⚠️ Error generando alerta de seguridad: {e}")
+                            # No fallar el reconocimiento por error en alertas
 
-        db.add(historial)
-        db.commit()
+            except Exception as e:
+                print(f"⚠️ Error obteniendo información del usuario: {e}")
+                # No fallar el reconocimiento por error en BD
 
-        # Añadir información adicional a la respuesta
+        # PASO 9: Registrar en historial
+        try:
+            client_ip = request.client.host if request else "unknown"
+
+            historial = HistorialReconocimiento(
+                usuario_id=response_data["persona_id"],
+                imagen_consulta_path=temp_file_path,
+                confianza=int(response_data["confianza"]),
+                distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
+                reconocido=response_data["reconocido"],
+                alerta_generada=alerta_seguridad is not None,
+                caracteristicas_consulta=convert_numpy_types(recognition_result.get("details", {})),
+                ip_origen=client_ip
+            )
+
+            db.add(historial)
+            db.commit()
+            response_data["historial_id"] = historial.id
+            print(f"💾 Historial guardado: ID={historial.id}")
+
+        except Exception as e:
+            print(f"⚠️ Error guardando historial: {e}")
+            # No fallar el reconocimiento por error en historial
+
+        # PASO 10: Añadir información adicional a la respuesta
         response_data["persona_info"] = persona_info
         response_data["alerta_seguridad"] = alerta_seguridad
-        response_data["historial_id"] = historial.id
 
-        # Mensaje de respuesta
+        # PASO 11: Determinar mensaje de respuesta
         if response_data["reconocido"]:
             if alerta_seguridad:
                 mensaje = f"🚨 PERSONA REQUISITORIADA IDENTIFICADA: {persona_info['nombre']} {persona_info['apellido']} - ALERTA GENERADA"
             else:
-                mensaje = f"✅ Persona identificada: {persona_info['nombre']} {persona_info['apellido']}"
+                mensaje = f"✅ Persona identificada: {persona_info['nombre']} {persona_info['apellido']} (Confianza: {response_data['confianza']}%)"
         else:
-            mensaje = "❌ No se pudo identificar a la persona en la imagen"
-
-        response_data = convert_numpy_types(response_data)
-
-        # Registrar en historial CON DATOS LIMPIOS
-        if recognition_result.get("recognized"):
-            try:
-                historial = HistorialReconocimiento(
-                    usuario_id=response_data["persona_id"],
-                    imagen_consulta_path=temp_file_path,
-                    confianza=int(response_data["confianza"]),
-                    distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
-                    reconocido=response_data["reconocido"],
-                    alerta_generada=alerta_seguridad is not None,
-                    caracteristicas_consulta=convert_numpy_types(recognition_result.get("details", {})),
-                    ip_origen=client_ip
-                )
-
-                db.add(historial)
-                db.commit()
-
-                response_data["historial_id"] = historial.id
-                print(f"💾 Historial guardado: ID={historial.id}")
-
-            except Exception as e:
-                print(f"⚠️ Error guardando historial: {e}")
-                # No fallar el reconocimiento por error de historial
+            mensaje = f"❌ No se pudo identificar a la persona en la imagen (Confianza insuficiente: {response_data['confianza']}%)"
 
         return ResponseWithData(
             success=True,
@@ -284,16 +313,138 @@ async def identificar_persona(
         )
 
     except HTTPException:
+        # Re-lanzar HTTPExceptions tal como están
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en el reconocimiento: {str(e)}")
+        # Capturar cualquier otro error no manejado
+        print(f"❌ Error inesperado en identificación: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno del servidor: {str(e)}"
+        )
 
     finally:
-        # Limpiar archivo temporal (opcional, mantener para historial)
+        # OPCIONAL: Limpiar archivo temporal
+        # (Comentado para mantener archivos para historial)
+        # if temp_file_path and os.path.exists(temp_file_path):
+        #     try:
+        #         os.remove(temp_file_path)
+        #     except Exception as e:
+        #         print(f"⚠️ Error eliminando archivo temporal: {e}")
+        pass
+
+
+@router.post("/debug/test-image", response_model=ResponseWithData, summary="Probar procesamiento de imagen")
+async def test_image_processing(
+        imagen: UploadFile = File(...),
+        db: Session = Depends(get_db)
+):
+    """
+    Endpoint para debugging del procesamiento de imágenes
+    """
+    temp_file_path = None
+
+    try:
+        # Validar archivo
+        if not validate_image_file(imagen):
+            raise HTTPException(status_code=400, detail="Archivo de imagen inválido")
+
+        # Guardar imagen temporal
+        file_extension = os.path.splitext(imagen.filename)[1]
+        temp_filename = f"debug_{uuid.uuid4().hex}{file_extension}"
+        temp_file_path = os.path.join(TEMP_DIR, temp_filename)
+
+        with open(temp_file_path, "wb") as buffer:
+            content = await imagen.read()
+            buffer.write(content)
+
+        # Ejecutar validación completa
+        from utils.debug_helper import DebugHelper
+        debug_results = DebugHelper.validate_image_pipeline(temp_file_path)
+
+        return ResponseWithData(
+            success=True,
+            message="Debugging de imagen completado",
+            data=debug_results
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en debugging: {str(e)}")
+
+    finally:
+        # Limpiar archivo temporal
         if temp_file_path and os.path.exists(temp_file_path):
-            # Decidir si mantener o eliminar el archivo temporal
-            # Por ahora lo mantenemos para el historial
-            pass
+            try:
+                os.remove(temp_file_path)
+            except:
+                pass
+
+
+@router.get("/debug/test-all-images", response_model=ResponseWithData, summary="Probar todas las imágenes")
+async def test_all_images():
+    """
+    Prueba el procesamiento de todas las imágenes en la BD
+    """
+    try:
+        from utils.debug_helper import DebugHelper
+        results = DebugHelper.test_all_user_images()
+
+        return ResponseWithData(
+            success=True,
+            message=f"Testing completado: {results['successful']}/{results['total_images']} exitosas",
+            data=results
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en testing: {str(e)}")
+
+
+@router.get("/debug/model-test", response_model=ResponseWithData, summary="Probar reconocimiento del modelo")
+async def test_model_recognition():
+    """
+    Prueba el reconocimiento con imágenes existentes en la BD
+    """
+    try:
+        from utils.debug_helper import DebugHelper
+        results = DebugHelper.test_model_recognition()
+
+        if "error" in results:
+            return ResponseWithData(
+                success=False,
+                message=results["error"],
+                data=results
+            )
+
+        return ResponseWithData(
+            success=True,
+            message=f"Testing de reconocimiento completado: {results['successful_recognitions']}/{results['total_tests']} exitosos",
+            data=results
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en testing de modelo: {str(e)}")
+
+
+@router.post("/debug/export-report", response_model=ResponseWithData, summary="Exportar reporte de debugging")
+async def export_debug_report():
+    """
+    Exporta un reporte completo de debugging del sistema
+    """
+    try:
+        from utils.debug_helper import DebugHelper
+        report_path = DebugHelper.export_debug_report()
+
+        return ResponseWithData(
+            success=True,
+            message="Reporte de debugging exportado exitosamente",
+            data={
+                "report_path": report_path,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error exportando reporte: {str(e)}")
 
 
 @router.get("/historial", response_model=ResponseWithData, summary="Historial de reconocimientos")
