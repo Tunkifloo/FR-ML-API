@@ -33,6 +33,15 @@ class MLService:
         self.model_version = "1.0"
         self.training_history = []
 
+        # ⚡ CORREGIR: Añadir preprocesador SOLO si el archivo existe
+        try:
+            from .image_preprocessor import ImagePreprocessor
+            self.preprocessor = ImagePreprocessor(target_size=(100, 100))
+            print(f"✅ ImagePreprocessor inicializado correctamente")
+        except ImportError as e:
+            print(f"⚠️ ImagePreprocessor no disponible: {e}")
+            self.preprocessor = None
+
         # ⚡ AÑADIR ESTAS LÍNEAS NUEVAS ⚡
         self.auto_training_enabled = True
         self.min_persons_for_training = 2  # Mínimo 2 personas para entrenar
@@ -51,16 +60,12 @@ class MLService:
         self.storage_path = "storage/embeddings/"
         os.makedirs(self.storage_path, exist_ok=True)
 
-        from .image_preprocessor import ImagePreprocessor
-        self.preprocessor = ImagePreprocessor(target_size=(100, 100))
-        print(f"[INIT] ImagePreprocessor inicializado: {type(self.preprocessor)}")
-
     def preprocess_image_for_training(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
         CORREGIDO: Preprocesa imagen de manera ROBUSTA para entrenamiento
         """
         try:
-            print(f"🔧 Preprocessing para entrenamiento: {image.shape}")
+            print(f"🔧 Preprocessing para entrenamiento: {image.shape}, dtype: {image.dtype}")
 
             # PASO 1: Validar imagen
             if image is None or image.size == 0:
@@ -78,34 +83,81 @@ class MLService:
                     print(f"✅ Rostro detectado y extraído: {face_roi.shape}")
 
                     # Procesar ROI del rostro
-                    processed_face = self.preprocessor.preprocess_for_ml(face_roi, "both")
+                    if self.preprocessor:
+                        processed_face = self.preprocessor.preprocess_for_ml(face_roi, "both")
+                    else:
+                        # FALLBACK SIN PREPROCESSOR
+                        processed_face = self._basic_preprocess(face_roi)
                     return processed_face
                 else:
                     print(f"⚠️ No se detectaron rostros, usando imagen completa")
                     # FALLBACK: Usar imagen completa
-                    processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                    if self.preprocessor:
+                        processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                    else:
+                        processed_face = self._basic_preprocess(image)
                     return processed_face
 
             except Exception as e:
                 print(f"⚠️ Error en detección de rostros: {e}")
                 # FALLBACK: Usar imagen completa
-                processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                if self.preprocessor:
+                    processed_face = self.preprocessor.preprocess_for_ml(image, "both")
+                else:
+                    processed_face = self._basic_preprocess(image)
                 return processed_face
 
         except Exception as e:
             print(f"❌ Error crítico en preprocesamiento: {e}")
             print(f"   Input shape: {image.shape if image is not None else 'None'}")
 
-            # ÚLTIMO FALLBACK: Intentar procesamiento básico
+            # ÚLTIMO FALLBACK: Preprocesamiento básico sin preprocessor
             try:
                 if image is not None and image.size > 0:
-                    basic_processed = self.preprocessor.preprocess_for_ml(image, "both")
-                    print(f"🔄 Fallback exitoso: {basic_processed.shape}")
+                    basic_processed = self._basic_preprocess(image)
+                    print(f"🔄 Fallback básico exitoso: {basic_processed.shape}")
                     return basic_processed
             except Exception as e2:
                 print(f"❌ Fallback también falló: {e2}")
 
             return None
+
+    def _basic_preprocess(self, image: np.ndarray) -> np.ndarray:
+        """
+        NUEVO: Preprocesamiento básico sin dependencias externas
+        """
+        import cv2
+        import numpy as np
+
+        try:
+            processed = image.copy()
+
+            # Convertir a escala de grises
+            if len(processed.shape) == 3:
+                processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+
+            # Redimensionar
+            processed = cv2.resize(processed, (100, 100))
+
+            # Asegurar uint8
+            if processed.dtype != np.uint8:
+                if processed.max() <= 1.0:
+                    processed = (processed * 255).astype(np.uint8)
+                else:
+                    processed = processed.astype(np.uint8)
+
+            # Ecualización básica
+            processed = cv2.equalizeHist(processed)
+
+            # Normalizar para entrenamiento
+            processed = processed.astype(np.float64) / 255.0
+
+            print(f"🔧 Preprocesamiento básico: {processed.shape}, dtype: {processed.dtype}")
+            return processed
+
+        except Exception as e:
+            print(f"❌ Error en preprocesamiento básico: {e}")
+            raise
 
     def train_models(self, images_by_person: Dict[int, List[np.ndarray]]) -> Dict[str, Any]:
         """
