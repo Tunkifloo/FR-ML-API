@@ -12,15 +12,44 @@ load_dotenv()
 RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT') is not None
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
-# Configuración de base de datos
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_USER = os.getenv('DB_USER', 'root')
-DB_PASSWORD = os.getenv('DB_PASSWORD', '@dmin')
-DB_NAME = os.getenv('DB_NAME', 'face_recognition_db')
-DB_PORT = os.getenv('DB_PORT', '3306')
-
 print(f"🌍 Entorno detectado: {ENVIRONMENT}")
 print(f"🚂 Railway: {'Sí' if RAILWAY_ENVIRONMENT else 'No'}")
+
+# Configuración de base de datos con prioridad para variables de Railway
+if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production':
+    # Variables de Railway MySQL (tienen prioridad)
+    DB_HOST = os.getenv('MYSQLHOST') or os.getenv('DB_HOST', 'localhost')
+    DB_USER = os.getenv('MYSQLUSER') or os.getenv('DB_USER', 'root')
+    DB_PASSWORD = os.getenv('MYSQLPASSWORD') or os.getenv('DB_PASSWORD')
+    DB_NAME = os.getenv('MYSQLDATABASE') or os.getenv('DB_NAME', 'railway')
+    DB_PORT = os.getenv('MYSQLPORT') or os.getenv('DB_PORT', '3306')
+
+    print(f"🚂 Railway MySQL Config:")
+    print(f"   Host: {DB_HOST}")
+    print(f"   Usuario: {DB_USER}")
+    print(f"   Base de datos: {DB_NAME}")
+    print(f"   Puerto: {DB_PORT}")
+
+else:
+    # Configuración local para desarrollo
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_USER = os.getenv('DB_USER', 'root')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '@dmin')
+    DB_NAME = os.getenv('DB_NAME', 'face_recognition_db')
+    DB_PORT = os.getenv('DB_PORT', '3306')
+
+# Verificar que tenemos todas las variables críticas
+if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+    missing = []
+    if not DB_HOST: missing.append('DB_HOST/MYSQLHOST')
+    if not DB_USER: missing.append('DB_USER/MYSQLUSER')
+    if not DB_PASSWORD: missing.append('DB_PASSWORD/MYSQLPASSWORD')
+    if not DB_NAME: missing.append('DB_NAME/MYSQLDATABASE')
+
+    print(f"❌ Variables faltantes: {', '.join(missing)}")
+    if RAILWAY_ENVIRONMENT:
+        print("💡 Verifica que el servicio MySQL esté conectado en Railway")
+    raise ValueError(f"Variables de entorno de base de datos faltantes: {', '.join(missing)}")
 
 # Codificar la contraseña para URLs (maneja caracteres especiales)
 encoded_password = quote_plus(DB_PASSWORD)
@@ -37,13 +66,14 @@ if ENVIRONMENT == 'production' or RAILWAY_ENVIRONMENT:
         "echo": False,
         "pool_pre_ping": True,
         "pool_recycle": 300,
-        "pool_size": 5,
-        "max_overflow": 10,
+        "pool_size": 3,  # Reducido para Railway
+        "max_overflow": 5,
         "connect_args": {
             "charset": "utf8mb4",
             "connect_timeout": 60,
             "read_timeout": 30,
             "write_timeout": 30,
+            "autocommit": True
         }
     }
     print("🚀 Configuración de PRODUCCIÓN aplicada")
@@ -59,7 +89,12 @@ else:
     print("🔧 Configuración de DESARROLLO aplicada")
 
 # Crear el engine
-engine = create_engine(DATABASE_URL, **engine_config)
+try:
+    engine = create_engine(DATABASE_URL, **engine_config)
+    print("✅ Engine de base de datos creado")
+except Exception as e:
+    print(f"❌ Error creando engine: {e}")
+    raise
 
 # Crear sessionmaker
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -81,9 +116,16 @@ def init_database():
     Inicializa la base de datos creando todas las tablas
     """
     try:
+        print("🔄 Inicializando tablas de base de datos...")
         from models.database_models import Base
         Base.metadata.create_all(bind=engine)
         print("✅ Base de datos inicializada correctamente")
+
+        # Verificar conexión
+        with engine.connect() as conn:
+            result = conn.execute("SELECT 1 as test")
+            print(f"✅ Conexión verificada: {result.fetchone()}")
+
     except Exception as e:
         print(f"❌ Error inicializando base de datos: {e}")
         raise
@@ -97,9 +139,12 @@ def drop_all_tables():
         print("🚫 No se pueden eliminar tablas en producción")
         return
 
-    from models.database_models import Base
-    Base.metadata.drop_all(bind=engine)
-    print("🗑️ Todas las tablas eliminadas")
+    try:
+        from models.database_models import Base
+        Base.metadata.drop_all(bind=engine)
+        print("🗑️ Todas las tablas eliminadas")
+    except Exception as e:
+        print(f"❌ Error eliminando tablas: {e}")
 
 
 def create_database_if_not_exists():
@@ -145,23 +190,28 @@ def test_connection():
     Prueba la conexión a la base de datos
     """
     try:
-        with engine.connect() as connection:
-            result = connection.execute("SELECT 1")
-            print("✅ Conexión a la base de datos exitosa")
+        print("🔄 Probando conexión a la base de datos...")
 
-            # Test adicional para Railway
-            if RAILWAY_ENVIRONMENT:
-                connection.execute("SELECT DATABASE()")
-                print("✅ Railway MySQL: Conexión verificada")
+        with engine.connect() as connection:
+            result = connection.execute("SELECT 1 as test, DATABASE() as db_name, USER() as user")
+            row = result.fetchone()
+
+            print(f"✅ Conexión exitosa!")
+            print(f"   Test: {row[0]}")
+            print(f"   Base de datos: {row[1]}")
+            print(f"   Usuario: {row[2]}")
 
             return True
+
     except Exception as e:
         print(f"❌ Error de conexión: {e}")
         if RAILWAY_ENVIRONMENT:
-            print("💡 Verificar variables de entorno en Railway Dashboard")
+            print("💡 Verificar que MySQL esté activo en Railway")
+            print("💡 Verificar que las variables MYSQL* estén disponibles")
         return False
 
 
 # Verificación automática al importar (solo en desarrollo)
-if __name__ == "__main__" and ENVIRONMENT != 'production':
+if __name__ == "__main__":
+    print("🔧 Probando configuración de base de datos...")
     test_connection()

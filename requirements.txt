@@ -10,11 +10,14 @@ alembic==1.12.1
 
 # Machine Learning y procesamiento de imágenes
 numpy==1.24.3
-opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78
 scikit-learn==1.3.2
 scikit-image==0.21.0
 pillow==10.1.0
 matplotlib==3.8.2
+scipy==1.11.4
+pandas==2.1.4
+joblib==1.3.2
 
 # Utilidades
 python-dotenv==1.0.0
@@ -29,3 +32,7 @@ loguru==0.7.2
 # Testing (opcional)
 pytest==7.4.3
 httpx==0.25.2
+
+# Dependencias adicionales para estabilidad
+typing-extensions==4.8.0
+setuptools==69.0.3

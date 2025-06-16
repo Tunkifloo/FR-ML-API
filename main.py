@@ -7,13 +7,17 @@ import os
 from datetime import datetime
 
 # Importar configuración de base de datos
-from config.database import init_database, create_database_if_not_exists
+from config.database import init_database, create_database_if_not_exists, test_connection
 
 # Importar routers
 from routers import users, recognition, face_training
 
 # Importar servicios
 from services.ml_service import MLService
+
+# Detectar entorno Railway
+RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT') is not None
+PORT = int(os.getenv('PORT', 8000))
 
 # Configuración de la aplicación
 app = FastAPI(
@@ -52,6 +56,7 @@ app = FastAPI(
     ---
 
     **Desarrollado cumpliendo estrictamente con los requerimientos del proyecto académico.**
+    **🚂 Desplegado en Railway con auto-detection**
     """,
     version="1.0.0",
     contact={
@@ -64,10 +69,12 @@ app = FastAPI(
     }
 )
 
-# Configurar CORS
+# Configurar CORS para Railway
+allowed_origins = ["*"]  # En producción, especificar dominios específicos
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especificar dominios específicos
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,7 +90,7 @@ app.include_router(recognition.router, prefix="/api/v1")
 app.include_router(face_training.router, prefix="/api/v1")
 
 # Inicializar servicios
-ml_service = MLService()
+ml_service = None
 
 
 @app.on_event("startup")
@@ -91,16 +98,31 @@ async def startup_event():
     """
     Eventos de inicio de la aplicación
     """
+    global ml_service
+
     print("🚀 Iniciando Sistema de Reconocimiento Facial...")
+    print(f"🌍 Entorno: {'Railway' if RAILWAY_ENVIRONMENT else 'Local'}")
+    print(f"🔌 Puerto: {PORT}")
 
     try:
-        # Crear base de datos si no existe
+        # Verificar conexión a base de datos PRIMERO
+        print("🔄 Verificando conexión a base de datos...")
+        if not test_connection():
+            print("❌ Error crítico: No se puede conectar a la base de datos")
+            print("🔧 Verificaciones necesarias:")
+            print("   - Servicio MySQL activo en Railway")
+            print("   - Variables MYSQL* disponibles")
+            raise Exception("Conexión a base de datos falló")
+
+        # Crear base de datos si no existe (solo local)
         create_database_if_not_exists()
 
         # Inicializar tablas
+        print("🔄 Inicializando estructura de base de datos...")
         init_database()
 
         # Crear directorios necesarios
+        print("🔄 Creando directorios de almacenamiento...")
         directories = [
             "storage/images",
             "storage/temp",
@@ -111,24 +133,47 @@ async def startup_event():
 
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
+            print(f"   ✅ {directory}")
 
-        # Intentar cargar modelos ML si existen
+        # Inicializar servicio ML
+        print("🔄 Inicializando servicios de Machine Learning...")
         try:
+            ml_service = MLService()
+
+            # Intentar cargar modelos ML si existen
             ml_service.load_models()
             if ml_service.is_trained:
                 print("✅ Modelos de ML cargados exitosamente")
             else:
                 print("⚠️ Modelos de ML no encontrados - se entrenarán con los primeros datos")
-        except Exception as e:
-            print(f"⚠️ No se pudieron cargar modelos ML: {e}")
 
-        print("✅ Sistema iniciado correctamente")
-        print(f"📅 Fecha de inicio: {datetime.now().isoformat()}")
-        print("🌐 API disponible en: http://localhost:8000")
-        print("📚 Documentación en: http://localhost:8000/docs")
+        except Exception as e:
+            print(f"⚠️ Warning en ML service: {e}")
+            print("   Se creará un servicio ML básico")
+            ml_service = MLService()
+
+        print("=" * 60)
+        print("✅ SISTEMA INICIADO CORRECTAMENTE")
+        print("=" * 60)
+        print(f"📅 Fecha: {datetime.now().isoformat()}")
+
+        if RAILWAY_ENVIRONMENT:
+            print("🚂 Desplegado en Railway")
+            print("🌐 API disponible en el dominio público de Railway")
+        else:
+            print(f"🌐 API local: http://localhost:{PORT}")
+            print(f"📚 Docs: http://localhost:{PORT}/docs")
 
     except Exception as e:
-        print(f"❌ Error al iniciar el sistema: {e}")
+        print("=" * 60)
+        print("❌ ERROR CRÍTICO AL INICIAR SISTEMA")
+        print("=" * 60)
+        print(f"Error: {e}")
+        print("\n🔧 VERIFICACIONES NECESARIAS:")
+        print("1. Servicio MySQL activo en Railway")
+        print("2. Variables de entorno MySQL disponibles")
+        print("3. Permisos de escritura en directorios")
+        print("4. Dependencias instaladas correctamente")
         raise
 
 
@@ -141,10 +186,13 @@ async def shutdown_event():
 
     try:
         # Guardar modelos ML si están entrenados
-        if ml_service.is_trained:
-            ml_service.eigenfaces_service.save_model()
-            ml_service.lbp_service.save_model()
-            print("💾 Modelos ML guardados")
+        if ml_service and ml_service.is_trained:
+            print("💾 Guardando modelos ML...")
+            if hasattr(ml_service, 'eigenfaces_service'):
+                ml_service.eigenfaces_service.save_model()
+            if hasattr(ml_service, 'lbp_service'):
+                ml_service.lbp_service.save_model()
+            print("✅ Modelos ML guardados")
 
         print("✅ Sistema cerrado correctamente")
 
@@ -161,12 +209,15 @@ async def root():
         "message": "🤖 Sistema de Reconocimiento Facial - API REST",
         "version": "1.0.0",
         "status": "✅ Activo",
+        "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
         "timestamp": datetime.now().isoformat(),
         "endpoints": {
             "documentacion": "/docs",
             "redoc": "/redoc",
             "usuarios": "/api/v1/usuarios",
-            "reconocimiento": "/api/v1/reconocimiento"
+            "reconocimiento": "/api/v1/reconocimiento",
+            "health": "/health",
+            "info": "/info/sistema"
         },
         "características": [
             "CRUD completo de usuarios",
@@ -184,12 +235,19 @@ async def health_check():
     Endpoint de verificación de salud del sistema
     """
     try:
+        # Verificar conexión a base de datos
+        db_connected = test_connection()
+
         # Verificar estado de los modelos ML
         ml_status = {
-            "trained": ml_service.is_trained,
-            "eigenfaces_ready": ml_service.eigenfaces_service.is_trained if hasattr(ml_service,
-                                                                                    'eigenfaces_service') else False,
-            "lbp_ready": ml_service.lbp_service.is_trained if hasattr(ml_service, 'lbp_service') else False
+            "service_initialized": ml_service is not None,
+            "trained": ml_service.is_trained if ml_service else False,
+            "eigenfaces_ready": (ml_service.eigenfaces_service.is_trained
+                                 if ml_service and hasattr(ml_service, 'eigenfaces_service')
+                                 else False),
+            "lbp_ready": (ml_service.lbp_service.is_trained
+                          if ml_service and hasattr(ml_service, 'lbp_service')
+                          else False)
         }
 
         # Verificar directorios
@@ -201,19 +259,20 @@ async def health_check():
 
         # Estado general del sistema
         system_healthy = all([
+            db_connected,  # Base de datos conectada
+            ml_service is not None,  # Servicio ML inicializado
             all(directories_status.values()),  # Todos los directorios existen
-            True  # Agregar más verificaciones según sea necesario
         ])
 
         return {
             "status": "✅ Saludable" if system_healthy else "⚠️ Problemas detectados",
+            "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
             "timestamp": datetime.now().isoformat(),
             "components": {
-                "ml_models": ml_status,
+                "database": "✅ Conectado" if db_connected else "❌ Desconectado",
+                "ml_service": ml_status,
                 "directories": directories_status,
-                "database": "✅ Conectado"  # Simplificado, se podría verificar la conexión real
             },
-            "uptime": "Información no disponible",  # Se podría implementar un contador de tiempo
             "version": "1.0.0"
         }
 
@@ -223,6 +282,7 @@ async def health_check():
             content={
                 "status": "❌ Error",
                 "error": str(e),
+                "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
                 "timestamp": datetime.now().isoformat()
             }
         )
@@ -236,7 +296,7 @@ async def info_sistema():
     try:
         # Información de los modelos ML
         system_info = {}
-        if ml_service.is_trained:
+        if ml_service and ml_service.is_trained:
             system_info = ml_service.get_system_info()
 
         # Estadísticas de archivos
@@ -260,6 +320,7 @@ async def info_sistema():
             "sistema": {
                 "nombre": "Sistema de Reconocimiento Facial",
                 "version": "1.0.0",
+                "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
                 "estado": "Activo",
                 "timestamp": datetime.now().isoformat()
             },
@@ -310,14 +371,18 @@ async def internal_error_handler(request, exc):
     )
 
 
-# Configuración para desarrollo
+# Configuración para desarrollo y Railway
 if __name__ == "__main__":
-    print("🔧 Iniciando en modo desarrollo...")
+    if RAILWAY_ENVIRONMENT:
+        print("🚂 Iniciando en Railway...")
+    else:
+        print("🔧 Iniciando en modo desarrollo...")
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
+        port=PORT,
+        reload=False if RAILWAY_ENVIRONMENT else True,
         log_level="info",
         access_log=True
     )
