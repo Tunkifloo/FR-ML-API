@@ -11,8 +11,9 @@ cmds = [
 
 [phases.build]
 cmds = [
-    'mkdir -p storage/{images,temp,models,embeddings,logs}',
-    'chmod -R 755 storage/'
+    'mkdir -p storage/images storage/temp storage/models storage/embeddings storage/logs',
+    'chmod -R 755 storage/',
+    'ls -la storage/ || echo "Storage directory check"'
 ]
 
 [start]

@@ -1,15 +1,32 @@
+import os
+from datetime import datetime
+
+# ===== CREAR DIRECTORIOS ANTES DE CUALQUIER IMPORT =====
+# Esto debe ir ANTES de cualquier import que pueda crear archivos
+directories = [
+    "storage/images",
+    "storage/temp",
+    "storage/models",
+    "storage/embeddings",
+    "storage/logs"
+]
+
+print("🔄 Creando directorios de almacenamiento...")
+for directory in directories:
+    os.makedirs(directory, exist_ok=True)
+    print(f"   ✅ {directory}")
+
+# ===== AHORA SÍ IMPORTAR TODO =====
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-import os
-from datetime import datetime
 
 # Importar configuración de base de datos
 from config.database import init_database, create_database_if_not_exists, test_connection
 
-# Importar routers
+# Importar routers (ahora que los directorios ya existen)
 from routers import users, recognition, face_training
 
 # Importar servicios
@@ -105,13 +122,13 @@ async def startup_event():
     print(f"🔌 Puerto: {PORT}")
 
     try:
+        # Los directorios ya se crearon al inicio del archivo
+        print("✅ Directorios de almacenamiento ya creados")
+
         # Verificar conexión a base de datos PRIMERO
         print("🔄 Verificando conexión a base de datos...")
         if not test_connection():
             print("❌ Error crítico: No se puede conectar a la base de datos")
-            print("🔧 Verificaciones necesarias:")
-            print("   - Servicio MySQL activo en Railway")
-            print("   - Variables MYSQL* disponibles")
             raise Exception("Conexión a base de datos falló")
 
         # Crear base de datos si no existe (solo local)
@@ -120,20 +137,6 @@ async def startup_event():
         # Inicializar tablas
         print("🔄 Inicializando estructura de base de datos...")
         init_database()
-
-        # Crear directorios necesarios
-        print("🔄 Creando directorios de almacenamiento...")
-        directories = [
-            "storage/images",
-            "storage/temp",
-            "storage/models",
-            "storage/embeddings",
-            "storage/logs"
-        ]
-
-        for directory in directories:
-            os.makedirs(directory, exist_ok=True)
-            print(f"   ✅ {directory}")
 
         # Inicializar servicio ML
         print("🔄 Inicializando servicios de Machine Learning...")
@@ -169,11 +172,6 @@ async def startup_event():
         print("❌ ERROR CRÍTICO AL INICIAR SISTEMA")
         print("=" * 60)
         print(f"Error: {e}")
-        print("\n🔧 VERIFICACIONES NECESARIAS:")
-        print("1. Servicio MySQL activo en Railway")
-        print("2. Variables de entorno MySQL disponibles")
-        print("3. Permisos de escritura en directorios")
-        print("4. Dependencias instaladas correctamente")
         raise
 
 
