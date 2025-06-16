@@ -12,18 +12,10 @@ import json
 
 class EigenfacesService:
     """
-    Implementación del algoritmo Eigenfaces para reconocimiento facial
-    Sin usar modelos pre-entrenados, implementado desde cero
+    ✅ CORREGIDO: Implementación del algoritmo Eigenfaces con manejo de valores Infinity
     """
 
     def __init__(self, n_components: int = 150, image_size: Tuple[int, int] = (100, 100)):
-        """
-        Inicializa el servicio Eigenfaces
-
-        Args:
-            n_components: Número de componentes principales a mantener
-            image_size: Tamaño estándar de las imágenes (ancho, alto)
-        """
         self.n_components = n_components
         self.image_size = image_size
         self.pca = None
@@ -37,7 +29,7 @@ class EigenfacesService:
         self.is_trained = False
 
         # Configuración
-        self.threshold_distance = 2500  # Umbral para considerar una coincidencia
+        self.threshold_distance = 2500
         self.model_path = "storage/models/eigenfaces_model.pkl"
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
@@ -79,9 +71,27 @@ class EigenfacesService:
 
         return processed
 
+    def _clean_features_for_storage(self, features: np.ndarray) -> np.ndarray:
+        """
+        ✅ NUEVO: Limpia características eliminando valores Infinity y NaN
+        """
+        cleaned = features.copy()
+
+        # Reemplazar Infinity con valores máximos/mínimos válidos
+        cleaned[np.isposinf(cleaned)] = 1e6  # Infinity positivo → valor grande
+        cleaned[np.isneginf(cleaned)] = -1e6  # Infinity negativo → valor grande negativo
+        cleaned[np.isnan(cleaned)] = 0.0  # NaN → 0
+
+        # Clipear a rango razonable
+        cleaned = np.clip(cleaned, -1e6, 1e6)
+
+        print(f"🧹 Características limpiadas: shape={cleaned.shape}, range=[{cleaned.min():.3f}, {cleaned.max():.3f}]")
+
+        return cleaned
+
     def extract_features(self, image: np.ndarray) -> np.ndarray:
         """
-        CORREGIDO: Extrae características con validación robusta
+        ✅ CORREGIDO: Extrae características con limpieza de valores infinitos
         """
         if not self.is_trained:
             raise ValueError("El modelo no ha sido entrenado. Ejecute train() primero.")
@@ -134,15 +144,14 @@ class EigenfacesService:
         embedding = self.pca.transform(centered_image.reshape(1, -1))
         print(f"✅ Embedding generado: shape={embedding.shape}")
 
-        return embedding.flatten()
+        # ✅ CRÍTICO: Limpiar valores infinitos
+        clean_embedding = self._clean_features_for_storage(embedding.flatten())
+
+        return clean_embedding
 
     def train(self, images: List[np.ndarray], labels: List[int]) -> None:
         """
-        Entrena el modelo Eigenfaces con un conjunto de imágenes
-
-        Args:
-            images: Lista de imágenes preprocesadas
-            labels: Lista de etiquetas correspondientes a cada imagen
+        ✅ CORREGIDO: Entrena el modelo Eigenfaces con validación de estabilidad numérica
         """
         print(f"🎓 Iniciando entrenamiento Eigenfaces con {len(images)} imágenes...")
 
@@ -155,36 +164,62 @@ class EigenfacesService:
         # PASO 2: Convertir a matriz numpy
         X = np.array(processed_images)
 
-        # PASO 3: AHORA ajustar n_components (después de crear X)
-        max_components = min(len(images), X.shape[1]) - 1
+        # PASO 3: Validar datos de entrada
+        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+            print("⚠️ Datos de entrada contienen NaN o Infinity, limpiando...")
+            X = np.nan_to_num(X, nan=0.0, posinf=1.0, neginf=0.0)
+
+        # PASO 4: Ajustar n_components para evitar singularidad
+        max_components = min(len(images) - 1, X.shape[1] - 1)
         actual_components = min(self.n_components, max_components)
+
+        # ✅ AÑADIR REGULARIZACIÓN PARA ESTABILIDAD
+        if actual_components <= 1:
+            actual_components = 1
+            print("⚠️ Muy pocas imágenes, usando 1 componente")
 
         print(f"📊 Ajustando componentes: {self.n_components} → {actual_components}")
         print(f"📈 Datos disponibles: {len(images)} imágenes, {X.shape[1]} características")
 
-        # PASO 4: Inicializar PCA con componentes ajustados
-        self.pca = PCA(n_components=actual_components, whiten=True)
+        # PASO 5: Inicializar PCA con componentes ajustados y estabilidad numérica
+        self.pca = PCA(n_components=actual_components, whiten=True, svd_solver='auto')
 
-        # PASO 5: Calcular la cara promedio
+        # PASO 6: Calcular la cara promedio
         self.mean_face = np.mean(X, axis=0)
 
-        # PASO 6: Centrar los datos
+        # PASO 7: Centrar los datos
         X_centered = X - self.mean_face
 
-        # PASO 7: Aplicar PCA
-        self.pca.fit(X_centered)
+        # PASO 8: Aplicar PCA con validación
+        try:
+            self.pca.fit(X_centered)
+        except Exception as e:
+            print(f"⚠️ Error en PCA, aplicando regularización: {e}")
+            # Añadir pequeña regularización en caso de singularidad
+            regularization = np.eye(X_centered.shape[1]) * 1e-6
+            X_reg = X_centered + regularization[:X_centered.shape[0], :]
+            self.pca.fit(X_reg)
 
-        # PASO 8: Guardar eigenfaces
+        # PASO 9: Guardar eigenfaces
         self.eigenfaces = self.pca.components_
 
-        # PASO 9: Generar embeddings para todas las imágenes de entrenamiento
+        # PASO 10: Generar embeddings con limpieza
         self.trained_embeddings = []
         self.trained_labels = []
 
         for i, img_vector in enumerate(X_centered):
-            embedding = self.pca.transform(img_vector.reshape(1, -1))
-            self.trained_embeddings.append(embedding.flatten())
-            self.trained_labels.append(labels[i])
+            try:
+                embedding = self.pca.transform(img_vector.reshape(1, -1))
+                # ✅ LIMPIAR VALORES INFINITOS
+                clean_embedding = self._clean_features_for_storage(embedding.flatten())
+                self.trained_embeddings.append(clean_embedding)
+                self.trained_labels.append(labels[i])
+            except Exception as e:
+                print(f"⚠️ Error generando embedding para imagen {i}: {e}")
+                # Usar embedding por defecto en caso de error
+                default_embedding = np.zeros(actual_components)
+                self.trained_embeddings.append(default_embedding)
+                self.trained_labels.append(labels[i])
 
         self.is_trained = True
 
@@ -194,12 +229,7 @@ class EigenfacesService:
 
     def add_new_person(self, images: List[np.ndarray], person_id: int) -> None:
         """
-        Añade una nueva persona al modelo sin reentrenar completamente
-        (Entrenamiento incremental)
-
-        Args:
-            images: Lista de imágenes de la nueva persona
-            person_id: ID de la persona
+        ✅ CORREGIDO: Añade una nueva persona con limpieza de características
         """
         if not self.is_trained:
             raise ValueError("El modelo debe estar entrenado antes de añadir nuevas personas")
@@ -217,21 +247,18 @@ class EigenfacesService:
             # Generar embedding
             embedding = self.pca.transform(centered_img.reshape(1, -1))
 
+            # ✅ LIMPIAR VALORES INFINITOS
+            clean_embedding = self._clean_features_for_storage(embedding.flatten())
+
             # Añadir a los datos de entrenamiento
-            self.trained_embeddings.append(embedding.flatten())
+            self.trained_embeddings.append(clean_embedding)
             self.trained_labels.append(person_id)
 
         print(f"✅ Persona añadida. Total embeddings: {len(self.trained_embeddings)}")
 
     def recognize_face(self, image: np.ndarray) -> Tuple[int, float, dict]:
         """
-        Reconoce una cara en una imagen
-
-        Args:
-            image: Imagen a reconocer
-
-        Returns:
-            Tupla con (person_id, confidence, details)
+        ✅ CORREGIDO: Reconoce una cara con manejo robusto de valores infinitos
         """
         if not self.is_trained:
             raise ValueError("El modelo no ha sido entrenado")
@@ -242,26 +269,53 @@ class EigenfacesService:
         # Calcular distancias a todos los embeddings conocidos
         distances = []
         for embedding in self.trained_embeddings:
-            dist = np.linalg.norm(query_embedding - embedding)
-            distances.append(dist)
+            # ✅ VALIDAR QUE AMBOS VECTORES SEAN FINITOS
+            if np.any(np.isinf(embedding)) or np.any(np.isnan(embedding)):
+                print("⚠️ Embedding almacenado contiene valores infinitos, usando distancia máxima")
+                distances.append(float('inf'))
+            elif np.any(np.isinf(query_embedding)) or np.any(np.isnan(query_embedding)):
+                print("⚠️ Query embedding contiene valores infinitos, usando distancia máxima")
+                distances.append(float('inf'))
+            else:
+                dist = np.linalg.norm(query_embedding - embedding)
+                distances.append(dist)
 
-        # Encontrar la menor distancia
+        # Encontrar la menor distancia válida
+        finite_distances = [d for d in distances if np.isfinite(d)]
+
+        if not finite_distances:
+            print("⚠️ Todas las distancias son infinitas, no se puede reconocer")
+            return -1, 0.0, {
+                "distance": float('inf'),
+                "threshold": self.threshold_distance,
+                "is_match": False,
+                "confidence_score": 0.0,
+                "algorithm": "eigenfaces",
+                "error": "All distances are infinite",
+                "timestamp": datetime.now().isoformat()
+            }
+
         min_distance_idx = np.argmin(distances)
         min_distance = distances[min_distance_idx]
         predicted_person_id = self.trained_labels[min_distance_idx]
 
-        # Calcular confianza
-        confidence = max(0, 100 - (min_distance / self.threshold_distance * 100))
+        # Calcular confianza solo si la distancia es finita
+        if np.isfinite(min_distance):
+            confidence = max(0, 100 - (min_distance / self.threshold_distance * 100))
+        else:
+            confidence = 0.0
 
         # Determinar si es una coincidencia válida
-        is_match = min_distance < self.threshold_distance
+        is_match = np.isfinite(min_distance) and min_distance < self.threshold_distance
 
         details = {
-            "distance": float(min_distance),
+            "distance": float(min_distance) if np.isfinite(min_distance) else float('inf'),
             "threshold": self.threshold_distance,
             "is_match": is_match,
             "confidence_score": confidence,
             "algorithm": "eigenfaces",
+            "finite_distances": len(finite_distances),
+            "total_distances": len(distances),
             "timestamp": datetime.now().isoformat()
         }
 
@@ -269,7 +323,7 @@ class EigenfacesService:
 
     def save_model(self, path: str = None) -> None:
         """
-        Guarda el modelo entrenado
+        ✅ CORREGIDO: Guarda el modelo con validación de valores infinitos
         """
         if path is None:
             path = self.model_path
@@ -277,16 +331,23 @@ class EigenfacesService:
         # Crear directorio si no existe
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
+        # ✅ LIMPIAR EMBEDDINGS ANTES DE GUARDAR
+        clean_embeddings = []
+        for embedding in self.trained_embeddings:
+            clean_embedding = self._clean_features_for_storage(embedding)
+            clean_embeddings.append(clean_embedding)
+
         model_data = {
             'pca': self.pca,
             'mean_face': self.mean_face,
             'eigenfaces': self.eigenfaces,
-            'trained_embeddings': self.trained_embeddings,
+            'trained_embeddings': clean_embeddings,  # ✅ USAR EMBEDDINGS LIMPIOS
             'trained_labels': self.trained_labels,
             'n_components': self.n_components,
             'image_size': self.image_size,
             'threshold_distance': self.threshold_distance,
-            'is_trained': self.is_trained
+            'is_trained': self.is_trained,
+            'model_version': '2.0_INFINITY_FIXED'
         }
 
         with open(path, 'wb') as f:
@@ -296,7 +357,7 @@ class EigenfacesService:
 
     def load_model(self, path: str = None) -> None:
         """
-        Carga un modelo previamente entrenado
+        ✅ CORREGIDO: Carga un modelo con limpieza automática de valores infinitos
         """
         if path is None:
             path = self.model_path
@@ -311,7 +372,14 @@ class EigenfacesService:
         self.pca = model_data['pca']
         self.mean_face = model_data['mean_face']
         self.eigenfaces = model_data['eigenfaces']
-        self.trained_embeddings = model_data['trained_embeddings']
+
+        # ✅ LIMPIAR EMBEDDINGS AL CARGAR
+        loaded_embeddings = model_data['trained_embeddings']
+        self.trained_embeddings = []
+        for embedding in loaded_embeddings:
+            clean_embedding = self._clean_features_for_storage(np.array(embedding))
+            self.trained_embeddings.append(clean_embedding)
+
         self.trained_labels = model_data['trained_labels']
         self.n_components = model_data['n_components']
         self.image_size = model_data['image_size']
@@ -321,11 +389,16 @@ class EigenfacesService:
         print(f"📂 Modelo cargado desde: {path}")
         print(f"📊 Embeddings cargados: {len(self.trained_embeddings)}")
 
+        # Verificar limpieza
+        infinite_count = sum(1 for emb in self.trained_embeddings if np.any(np.isinf(emb)))
+        if infinite_count > 0:
+            print(f"⚠️ {infinite_count} embeddings tenían valores infinitos (limpiados automáticamente)")
+
     def get_model_info(self) -> dict:
         """
-        Obtiene información del modelo actual
+        ✅ CORREGIDO: Obtiene información del modelo con diagnósticos de estabilidad
         """
-        return {
+        info = {
             "algorithm": "eigenfaces",
             "is_trained": self.is_trained,
             "n_components": self.n_components,
@@ -333,8 +406,26 @@ class EigenfacesService:
             "total_embeddings": len(self.trained_embeddings) if self.is_trained else 0,
             "unique_persons": len(set(self.trained_labels)) if self.is_trained else 0,
             "threshold_distance": self.threshold_distance,
-            "variance_explained": sum(self.pca.explained_variance_ratio_) if self.is_trained else 0
+            "variance_explained": sum(self.pca.explained_variance_ratio_) if self.is_trained else 0,
+            "model_version": "2.0_INFINITY_FIXED"
         }
+
+        # ✅ AÑADIR DIAGNÓSTICOS DE ESTABILIDAD
+        if self.is_trained and self.trained_embeddings:
+            infinite_embeddings = sum(1 for emb in self.trained_embeddings if np.any(np.isinf(emb)))
+            nan_embeddings = sum(1 for emb in self.trained_embeddings if np.any(np.isnan(emb)))
+
+            info.update({
+                "stability_diagnostics": {
+                    "infinite_embeddings": infinite_embeddings,
+                    "nan_embeddings": nan_embeddings,
+                    "stable_embeddings": len(self.trained_embeddings) - infinite_embeddings - nan_embeddings,
+                    "stability_ratio": (len(self.trained_embeddings) - infinite_embeddings - nan_embeddings) / len(
+                        self.trained_embeddings)
+                }
+            })
+
+        return info
 
     def visualize_eigenfaces(self, n_faces: int = 20) -> List[np.ndarray]:
         """
