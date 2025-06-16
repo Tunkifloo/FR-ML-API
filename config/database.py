@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import text
 import os
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
@@ -193,7 +194,7 @@ def test_connection():
         print("🔄 Probando conexión a la base de datos...")
 
         with engine.connect() as connection:
-            result = connection.execute("SELECT 1 as test, DATABASE() as db_name, USER() as user")
+            result = connection.execute(text("SELECT 1 as test, DATABASE() as db_name, USER() as user"))
             row = result.fetchone()
 
             print(f"✅ Conexión exitosa!")
