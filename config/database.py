@@ -124,7 +124,7 @@ def init_database():
 
         # Verificar conexión
         with engine.connect() as conn:
-            result = conn.execute("SELECT 1 as test")
+            result = conn.execute(text("SELECT 1 as test"))
             print(f"✅ Conexión verificada: {result.fetchone()}")
 
     except Exception as e:
