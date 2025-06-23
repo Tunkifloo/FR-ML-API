@@ -3,18 +3,47 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import text
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv # Importamos load_dotenv
 from urllib.parse import quote_plus
 
-# Cargar variables de entorno
-load_dotenv()
+# ====================================================================
+# PASO CLAVE: Determinar qué archivo .env cargar
+# ====================================================================
 
-# Detectar si estamos en Railway
+# Primero, detectamos el entorno. Preferimos 'ENVIRONMENT' si está seteado.
+# Si RAILWAY_ENVIRONMENT está presente, estamos en Railway (producción).
 RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT') is not None
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+
+# Si no estamos en Railway, intentamos obtener 'ENVIRONMENT', sino, por defecto 'development'.
+if RAILWAY_ENVIRONMENT:
+    ENVIRONMENT = 'production' # Si es Railway, siempre es producción
+else:
+    ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+
+# Definir la ruta del archivo .env a cargar
+dotenv_path = '.env' # Por defecto, carga .env (puede ser para settings compartidos)
+
+if ENVIRONMENT == 'development':
+    # Si estamos en desarrollo, preferimos .env.development
+    if os.path.exists('.env.development'):
+        dotenv_path = '.env.development'
+    # Si no existe .env.development, se mantiene .env por defecto (que ya está seteado)
+elif ENVIRONMENT == 'production':
+    # Si estamos en producción, preferimos .env.production
+    if os.path.exists('.env.production'):
+        dotenv_path = '.env.production'
+    # Si no existe .env.production, se mantiene .env por defecto (que ya está seteado)
+
+# Cargar variables de entorno del archivo específico
+load_dotenv(dotenv_path=dotenv_path)
 
 print(f"🌍 Entorno detectado: {ENVIRONMENT}")
 print(f"🚂 Railway: {'Sí' if RAILWAY_ENVIRONMENT else 'No'}")
+print(f"📁 Cargando variables de: {dotenv_path}") # Mensaje para depuración
+
+# ====================================================================
+# El resto del código permanece igual
+# ====================================================================
 
 # Configuración de base de datos con prioridad para variables de Railway
 if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production':
@@ -25,19 +54,26 @@ if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production':
     DB_NAME = os.getenv('MYSQLDATABASE') or os.getenv('DB_NAME', 'railway')
     DB_PORT = os.getenv('MYSQLPORT') or os.getenv('DB_PORT', '3306')
 
-    print(f"🚂 Railway MySQL Config:")
+    print(f"🚂 Railway MySQL Config (o Producción):")
     print(f"   Host: {DB_HOST}")
     print(f"   Usuario: {DB_USER}")
     print(f"   Base de datos: {DB_NAME}")
     print(f"   Puerto: {DB_PORT}")
 
-else:
+else: # Este bloque se ejecutará si ENVIRONMENT es 'development' (tu entorno local)
     # Configuración local para desarrollo
     DB_HOST = os.getenv('DB_HOST', 'localhost')
     DB_USER = os.getenv('DB_USER', 'root')
-    DB_PASSWORD = os.getenv('DB_PASSWORD', '@dmin')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '@dmin') # O el valor de tu .env.development
     DB_NAME = os.getenv('DB_NAME', 'face_recognition_db')
     DB_PORT = os.getenv('DB_PORT', '3306')
+
+    print(f"🔧 Configuración LOCAL (Desarrollo):")
+    print(f"   Host: {DB_HOST}")
+    print(f"   Usuario: {DB_USER}")
+    print(f"   Base de datos: {DB_NAME}")
+    print(f"   Puerto: {DB_PORT}")
+
 
 # Verificar que tenemos todas las variables críticas
 if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
@@ -118,7 +154,7 @@ def init_database():
     """
     try:
         print("🔄 Inicializando tablas de base de datos...")
-        from models.database_models import Base
+        from models.database_models import Base # Asegúrate que esta importación sea correcta si Base no está definida en este archivo
         Base.metadata.create_all(bind=engine)
         print("✅ Base de datos inicializada correctamente")
 
@@ -136,12 +172,12 @@ def drop_all_tables():
     """
     Elimina todas las tablas (útil para desarrollo)
     """
-    if ENVIRONMENT == 'production':
+    if ENVIRONMENT == 'production': # Ahora usa la variable ENVIRONMENT
         print("🚫 No se pueden eliminar tablas en producción")
         return
 
     try:
-        from models.database_models import Base
+        from models.database_models import Base # Asegúrate que esta importación sea correcta
         Base.metadata.drop_all(bind=engine)
         print("🗑️ Todas las tablas eliminadas")
     except Exception as e:
@@ -152,7 +188,7 @@ def create_database_if_not_exists():
     """
     Crea la base de datos si no existe (solo para desarrollo local)
     """
-    if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production':
+    if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production': # Ahora usa la variable ENVIRONMENT
         print("🚂 Railway: Base de datos ya existe, saltando creación")
         return
 
