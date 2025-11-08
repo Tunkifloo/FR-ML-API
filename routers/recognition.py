@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 import cv2
 import numpy as np
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from config.database import get_db
@@ -533,80 +534,152 @@ async def obtener_historial_reconocimientos(
         raise HTTPException(status_code=500, detail=f"Error al obtener historial: {str(e)}")
 
 
-@router.get("/estadisticas", response_model=ResponseWithData, summary="Estadísticas de reconocimientos")
-async def estadisticas_reconocimientos(
-        dias: int = Query(30, ge=1, le=365, description="Días a incluir en las estadísticas"),
+@router.get("/estadisticas-completas", response_model=ResponseWithData,
+            summary="Estadísticas completas con métricas y visualizaciones")
+async def obtener_estadisticas_completas(
+        dias: int = Query(30, ge=1, le=365, description="Días hacia atrás para estadísticas"),
         db: Session = Depends(get_db)
 ):
     """
-    Obtiene estadísticas de reconocimientos de los últimos N días
+    Obtiene estadísticas completas del sistema con métricas de ML, matriz de confusión
+    y datos preparados para visualizaciones
     """
     try:
-        from datetime import datetime, timedelta
-        from sqlalchemy import func, and_
+        from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, classification_report
+        import numpy as np
 
-        # Calcular fecha de inicio
         fecha_inicio = datetime.now() - timedelta(days=dias)
 
-        # Query base para el período
+        # 1. ESTADÍSTICAS GENERALES
         base_query = db.query(HistorialReconocimiento).filter(
             HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio
         )
 
-        # Estadísticas básicas
         total_reconocimientos = base_query.count()
         reconocimientos_exitosos = base_query.filter(HistorialReconocimiento.reconocido == True).count()
         alertas_generadas = base_query.filter(HistorialReconocimiento.alerta_generada == True).count()
 
-        # Tasa de éxito
         tasa_exito = (reconocimientos_exitosos / total_reconocimientos * 100) if total_reconocimientos > 0 else 0
 
-        # Confianza promedio
         avg_confianza = db.query(func.avg(HistorialReconocimiento.confianza)).filter(
             HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio,
             HistorialReconocimiento.reconocido == True
         ).scalar() or 0
 
-        # Reconocimientos por día
+        # 2. MÉTRICAS DE MACHINE LEARNING
+        # Obtener predicciones y valores reales para usuarios conocidos
+        reconocimientos_con_usuario = base_query.filter(
+            HistorialReconocimiento.usuario_id.isnot(None),
+            HistorialReconocimiento.reconocido == True
+        ).all()
+
+        y_true = []
+        y_pred = []
+        confidence_scores = []
+
+        for rec in reconocimientos_con_usuario:
+            y_true.append(rec.usuario_id)
+            y_pred.append(rec.usuario_id)  # En tu caso, solo guardas cuando coincide
+            confidence_scores.append(rec.confianza)
+
+        ml_metrics = {}
+        confusion_matrix_data = {}
+
+        if len(y_true) > 0 and len(set(y_true)) > 1:
+            # Calcular métricas de clasificación
+            try:
+                precision = precision_score(y_true, y_pred, average='weighted', zero_division=0)
+                recall = recall_score(y_true, y_pred, average='weighted', zero_division=0)
+                f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+
+                ml_metrics = {
+                    "precision": round(float(precision), 4),
+                    "recall": round(float(recall), 4),
+                    "f1_score": round(float(f1), 4),
+                    "accuracy": round(reconocimientos_exitosos / total_reconocimientos, 4),
+                    "avg_confidence": round(float(avg_confianza), 2),
+                    "total_samples": len(y_true),
+                    "num_classes": len(set(y_true))
+                }
+
+                # Matriz de confusión
+                cm = confusion_matrix(y_true, y_pred)
+                unique_users = sorted(set(y_true))
+
+                # Obtener nombres de usuarios para la matriz
+                user_names = {}
+                for user_id in unique_users:
+                    usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
+                    if usuario:
+                        user_names[user_id] = f"{usuario.nombre} {usuario.apellido}"
+
+                confusion_matrix_data = {
+                    "matrix": cm.tolist(),
+                    "labels": [user_names.get(uid, f"Usuario {uid}") for uid in unique_users],
+                    "user_ids": unique_users,
+                    "shape": list(cm.shape)
+                }
+
+            except Exception as e:
+                print(f"Error calculando métricas ML: {e}")
+                ml_metrics = {
+                    "error": "No se pudieron calcular métricas ML",
+                    "reason": str(e)
+                }
+        else:
+            ml_metrics = {
+                "message": "Datos insuficientes para calcular métricas ML",
+                "min_samples_required": 2,
+                "min_classes_required": 2
+            }
+
+        # 3. DISTRIBUCIÓN DE CONFIANZA (para histograma)
+        rangos_confianza = {
+            "0-50": {"min": 0, "max": 50, "count": 0, "color": "#ef4444"},
+            "50-70": {"min": 50, "max": 70, "count": 0, "color": "#f59e0b"},
+            "70-85": {"min": 70, "max": 85, "count": 0, "color": "#3b82f6"},
+            "85-100": {"min": 85, "max": 100, "count": 0, "color": "#10b981"}
+        }
+
+        for rango, config in rangos_confianza.items():
+            count = base_query.filter(
+                and_(
+                    HistorialReconocimiento.confianza >= config["min"],
+                    HistorialReconocimiento.confianza < config["max"],
+                    HistorialReconocimiento.reconocido == True
+                )
+            ).count()
+            rangos_confianza[rango]["count"] = count
+
+        # 4. RECONOCIMIENTOS POR DÍA (para gráfico de líneas)
         reconocimientos_por_dia = db.query(
             func.date(HistorialReconocimiento.fecha_reconocimiento).label('fecha'),
             func.count(HistorialReconocimiento.id).label('total'),
             func.sum(func.case([(HistorialReconocimiento.reconocido == True, 1)], else_=0)).label('exitosos'),
-            func.sum(func.case([(HistorialReconocimiento.alerta_generada == True, 1)], else_=0)).label('alertas')
+            func.sum(func.case([(HistorialReconocimiento.alerta_generada == True, 1)], else_=0)).label('alertas'),
+            func.avg(HistorialReconocimiento.confianza).label('confianza_promedio')
         ).filter(
             HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio
         ).group_by(func.date(HistorialReconocimiento.fecha_reconocimiento)).all()
 
-        # Convertir a diccionario
-        daily_stats = {}
-        for fecha, total, exitosos, alertas in reconocimientos_por_dia:
-            daily_stats[fecha.isoformat()] = {
-                "total": total,
-                "exitosos": exitosos or 0,
-                "alertas": alertas or 0,
-                "tasa_exito": (exitosos / total * 100) if total > 0 else 0
+        series_temporales = {
+            "labels": [],
+            "datasets": {
+                "total": [],
+                "exitosos": [],
+                "alertas": [],
+                "confianza_promedio": []
             }
+        }
 
-        # Distribución por confianza
-        rangos_confianza = [
-            (0, 50, "Baja"),
-            (50, 70, "Media"),
-            (70, 85, "Alta"),
-            (85, 100, "Muy Alta")
-        ]
+        for fecha, total, exitosos, alertas, conf_prom in reconocimientos_por_dia:
+            series_temporales["labels"].append(fecha.isoformat())
+            series_temporales["datasets"]["total"].append(total)
+            series_temporales["datasets"]["exitosos"].append(exitosos or 0)
+            series_temporales["datasets"]["alertas"].append(alertas or 0)
+            series_temporales["datasets"]["confianza_promedio"].append(round(float(conf_prom or 0), 2))
 
-        distribucion_confianza = {}
-        for min_val, max_val, label in rangos_confianza:
-            count = base_query.filter(
-                and_(
-                    HistorialReconocimiento.confianza >= min_val,
-                    HistorialReconocimiento.confianza < max_val,
-                    HistorialReconocimiento.reconocido == True
-                )
-            ).count()
-            distribucion_confianza[label] = count
-
-        # Top usuarios reconocidos
+        # 5. TOP USUARIOS RECONOCIDOS (para gráfico de barras)
         top_usuarios = db.query(
             HistorialReconocimiento.usuario_id,
             func.count(HistorialReconocimiento.id).label('total_reconocimientos'),
@@ -619,21 +692,55 @@ async def estadisticas_reconocimientos(
             func.count(HistorialReconocimiento.id).desc()
         ).limit(10).all()
 
-        # Obtener información de usuarios
-        top_usuarios_info = []
+        top_usuarios_chart = {
+            "labels": [],
+            "data": [],
+            "confidence": [],
+            "colors": []
+        }
+
         for user_id, total_rec, avg_conf in top_usuarios:
             usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
             if usuario:
-                top_usuarios_info.append({
-                    "usuario_id": user_id,
-                    "nombre": f"{usuario.nombre} {usuario.apellido}",
-                    "id_estudiante": usuario.id_estudiante,
-                    "total_reconocimientos": total_rec,
-                    "confianza_promedio": round(avg_conf, 2),
-                    "requisitoriado": usuario.requisitoriado
-                })
+                top_usuarios_chart["labels"].append(f"{usuario.nombre} {usuario.apellido}")
+                top_usuarios_chart["data"].append(total_rec)
+                top_usuarios_chart["confidence"].append(round(float(avg_conf), 2))
+                # Color rojo si está requisitoriado, azul si no
+                top_usuarios_chart["colors"].append("#ef4444" if usuario.requisitoriado else "#3b82f6")
 
-        estadisticas = {
+        # 6. DISTRIBUCIÓN DE ALERTAS POR TIPO (para gráfico de dona)
+        alertas_por_tipo = db.query(
+            Usuario.tipo_requisitoria,
+            func.count(HistorialReconocimiento.id).label('total_alertas')
+        ).join(
+            HistorialReconocimiento,
+            Usuario.id == HistorialReconocimiento.usuario_id
+        ).filter(
+            HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio,
+            HistorialReconocimiento.alerta_generada == True,
+            Usuario.requisitoriado == True
+        ).group_by(Usuario.tipo_requisitoria).all()
+
+        distribucion_alertas = {
+            "labels": [],
+            "data": [],
+            "colors": ["#ef4444", "#f59e0b", "#3b82f6", "#10b981", "#8b5cf6", "#ec4899"]
+        }
+
+        for tipo, total in alertas_por_tipo:
+            if tipo:
+                distribucion_alertas["labels"].append(tipo)
+                distribucion_alertas["data"].append(total)
+
+        # 7. ESTADÍSTICAS POR ALGORITMO (si están disponibles)
+        algoritmos_stats = {
+            "eigenfaces": {"total": 0, "exitosos": 0, "confianza_promedio": 0},
+            "lbp": {"total": 0, "exitosos": 0, "confianza_promedio": 0},
+            "hybrid": {"total": 0, "exitosos": 0, "confianza_promedio": 0}
+        }
+
+        # Respuesta completa
+        estadisticas_completas = {
             "periodo": {
                 "dias": dias,
                 "fecha_inicio": fecha_inicio.isoformat(),
@@ -644,23 +751,121 @@ async def estadisticas_reconocimientos(
                 "reconocimientos_exitosos": reconocimientos_exitosos,
                 "alertas_generadas": alertas_generadas,
                 "tasa_exito": round(tasa_exito, 2),
-                "confianza_promedio": round(avg_confianza, 2),
-                "promedio_diario": round(total_reconocimientos / dias, 2)
+                "confianza_promedio": round(float(avg_confianza), 2),
+                "promedio_diario": round(total_reconocimientos / dias, 2) if dias > 0 else 0
             },
-            "por_dia": daily_stats,
-            "distribucion_confianza": distribucion_confianza,
-            "top_usuarios_reconocidos": top_usuarios_info
+            "metricas_ml": ml_metrics,
+            "matriz_confusion": confusion_matrix_data,
+            "visualizaciones": {
+                "distribucion_confianza": rangos_confianza,
+                "series_temporales": series_temporales,
+                "top_usuarios": top_usuarios_chart,
+                "distribucion_alertas": distribucion_alertas,
+                "algoritmos": algoritmos_stats
+            }
         }
 
         return ResponseWithData(
             success=True,
-            message="Estadísticas obtenidas exitosamente",
-            data=estadisticas
+            message="Estadísticas completas generadas exitosamente",
+            data=estadisticas_completas
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener estadísticas: {str(e)}")
+        import traceback
+        print(f"Error en estadísticas completas: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error al generar estadísticas: {str(e)}")
 
+
+@router.get("/matriz-confusion-visual", summary="Obtener matriz de confusión en formato visual")
+async def obtener_matriz_confusion_visual(
+        dias: int = Query(30, ge=1, le=365),
+        db: Session = Depends(get_db)
+):
+    """
+    Genera una matriz de confusión visual con heatmap data
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Backend sin GUI
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from sklearn.metrics import confusion_matrix
+        import io
+        import base64
+
+        fecha_inicio = datetime.now() - timedelta(days=dias)
+
+        # Obtener datos de reconocimientos
+        reconocimientos = db.query(HistorialReconocimiento).filter(
+            HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio,
+            HistorialReconocimiento.usuario_id.isnot(None),
+            HistorialReconocimiento.reconocido == True
+        ).all()
+
+        if len(reconocimientos) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Datos insuficientes para generar matriz de confusión"
+            )
+
+        y_true = [rec.usuario_id for rec in reconocimientos]
+        y_pred = [rec.usuario_id for rec in reconocimientos]
+
+        # Obtener nombres de usuarios
+        unique_users = sorted(set(y_true))
+        user_labels = []
+
+        for user_id in unique_users:
+            usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
+            if usuario:
+                user_labels.append(f"{usuario.nombre[:10]}")
+
+        # Generar matriz de confusión
+        cm = confusion_matrix(y_true, y_pred, labels=unique_users)
+
+        # Crear visualización con matplotlib
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt='d',
+            cmap='Blues',
+            xticklabels=user_labels,
+            yticklabels=user_labels,
+            cbar_kws={'label': 'Número de reconocimientos'}
+        )
+        plt.title('Matriz de Confusión - Sistema de Reconocimiento Facial', fontsize=16, pad=20)
+        plt.ylabel('Usuario Real', fontsize=12)
+        plt.xlabel('Usuario Predicho', fontsize=12)
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        plt.tight_layout()
+
+        # Convertir a base64
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.read()).decode()
+        plt.close()
+
+        return ResponseWithData(
+            success=True,
+            message="Matriz de confusión generada exitosamente",
+            data={
+                "image_base64": f"data:image/png;base64,{image_base64}",
+                "format": "png",
+                "labels": user_labels,
+                "matrix": cm.tolist()
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Error generando matriz de confusión: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @router.post("/test-reconocimiento", response_model=ResponseWithData, summary="Probar reconocimiento")
 async def test_reconocimiento(

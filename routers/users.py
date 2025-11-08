@@ -110,10 +110,10 @@ async def crear_usuario(
     """
     try:
         # Validar número de imágenes
-        if len(imagenes) < 1 or len(imagenes) > 5:
+        if len(imagenes) < 1 or len(imagenes) > 15:
             raise HTTPException(
                 status_code=400,
-                detail="Debe proporcionar entre 1 y 5 imágenes"
+                detail="Debe proporcionar entre 1 y 15 imágenes"
             )
 
         # Validar archivos de imagen
@@ -902,10 +902,10 @@ async def añadir_imagenes_usuario(
         ).count()
 
         # Verificar límite de imágenes
-        if imagenes_existentes + len(imagenes) > 5:
+        if imagenes_existentes + len(imagenes) > 15:
             raise HTTPException(
                 status_code=400,
-                detail=f"El usuario ya tiene {imagenes_existentes} imágenes. Máximo permitido: 5"
+                detail=f"El usuario ya tiene {imagenes_existentes} imágenes. Máximo permitido: 15"
             )
 
         # Validar archivos

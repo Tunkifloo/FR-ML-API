@@ -32,9 +32,8 @@ from routers import users, recognition, face_training
 # Importar servicios
 from services.ml_service import MLService
 
-# Detectar entorno Railway
-RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT') is not None
-PORT = int(os.getenv('PORT', 8000))
+# Configuración solo para ambiente local
+PORT = 8000
 
 # Configuración de la aplicación
 app = FastAPI(
@@ -44,41 +43,36 @@ app = FastAPI(
 
     Sistema completo de gestión y reconocimiento facial implementado con:
 
-    ## 🤖 Algoritmos de Machine Learning (Sin modelos pre-entrenados)
+    ## Algoritmos de Machine Learning (Sin modelos pre-entrenados)
     - **Eigenfaces (PCA)**: Análisis de componentes principales para extracción de características
     - **Local Binary Patterns (LBP)**: Análisis de patrones locales para reconocimiento robusto
     - **Algoritmo Híbrido**: Combinación inteligente de ambos métodos
 
-    ## 🔍 Características Principales
-    - ✅ **CRUD Completo** de usuarios con 1-5 imágenes por persona
-    - ✅ **Reconocimiento Facial** en tiempo real
-    - ✅ **Sistema de Alertas** automático para personas requisitoriadas
-    - ✅ **Entrenamiento Continuo** (incremental) del modelo
-    - ✅ **Historial Completo** de reconocimientos
-    - ✅ **Estadísticas Avanzadas** y reportes
+    ## Características Principales
+    - CRUD Completo** de usuarios con 1-15 imágenes por persona
+    - Reconocimiento Facial en tiempo real
+    - Sistema de Alertas automático para personas requisitoriadas
+    - Entrenamiento Continuo (incremental) del modelo
+    - Historial Completo de reconocimientos
+    - Estadísticas Avanzadas y reportes
 
-    ## 🚨 Sistema de Seguridad
+    ## Sistema de Seguridad
     - Detección automática de personas requisitoriadas
     - Generación de alertas con niveles de prioridad
     - Simulación de notificación a autoridades
     - Registro completo de incidentes
 
-    ## 📊 Tecnologías Utilizadas
+    ## Tecnologías Utilizadas
     - **Backend**: FastAPI + Python 3.9
     - **Base de Datos**: MySQL con SQLAlchemy
     - **ML**: Eigenfaces (PCA) + LBP implementados desde cero
     - **Visión Computacional**: OpenCV + scikit-image
     - **Almacenamiento**: Sistema de archivos + JSON para embeddings
-
-    ---
-
-    **Desarrollado cumpliendo estrictamente con los requerimientos del proyecto académico.**
-    **🚂 Desplegado en Railway con auto-detection**
     """,
     version="1.0.0",
     contact={
         "name": "Sistema de Reconocimiento Facial",
-        "email": "admin@reconocimiento-facial.com"
+        "email": "nicolocisneros@gmail.com"
     },
     license_info={
         "name": "MIT License",
@@ -87,7 +81,7 @@ app = FastAPI(
 )
 
 # Configurar CORS para Railway
-allowed_origins = ["*"]  # En producción, especificar dominios específicos
+allowed_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -117,9 +111,9 @@ async def startup_event():
     """
     global ml_service
 
-    print("🚀 Iniciando Sistema de Reconocimiento Facial...")
-    print(f"🌍 Entorno: {'Railway' if RAILWAY_ENVIRONMENT else 'Local'}")
-    print(f"🔌 Puerto: {PORT}")
+    print(" Iniciando Sistema de Reconocimiento Facial...")
+    print(f" Entorno: Local")
+    print(f" Puerto: {PORT}")
 
     try:
         # Los directorios ya se crearon al inicio del archivo
@@ -156,16 +150,11 @@ async def startup_event():
             ml_service = MLService()
 
         print("=" * 60)
-        print("✅ SISTEMA INICIADO CORRECTAMENTE")
+        print("SISTEMA INICIADO CORRECTAMENTE")
         print("=" * 60)
         print(f"📅 Fecha: {datetime.now().isoformat()}")
-
-        if RAILWAY_ENVIRONMENT:
-            print("🚂 Desplegado en Railway")
-            print("🌐 API disponible en el dominio público de Railway")
-        else:
-            print(f"🌐 API local: http://localhost:{PORT}")
-            print(f"📚 Docs: http://localhost:{PORT}/docs")
+        print(f"🌐 API local: http://localhost:{PORT}")
+        print(f"📚 Docs: http://localhost:{PORT}/docs")
 
     except Exception as e:
         print("=" * 60)
@@ -180,12 +169,12 @@ async def shutdown_event():
     """
     Eventos de cierre de la aplicación
     """
-    print("🛑 Cerrando Sistema de Reconocimiento Facial...")
+    print("Cerrando Sistema de Reconocimiento Facial...")
 
     try:
         # Guardar modelos ML si están entrenados
         if ml_service and ml_service.is_trained:
-            print("💾 Guardando modelos ML...")
+            print("Guardando modelos ML...")
             if hasattr(ml_service, 'eigenfaces_service'):
                 ml_service.eigenfaces_service.save_model()
             if hasattr(ml_service, 'lbp_service'):
@@ -204,10 +193,10 @@ async def root():
     Endpoint raíz con información del sistema
     """
     return {
-        "message": "🤖 Sistema de Reconocimiento Facial - API REST",
+        "message": "Sistema de Reconocimiento Facial - API REST",
         "version": "1.0.0",
         "status": "✅ Activo",
-        "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
+        "environment": "Local",
         "timestamp": datetime.now().isoformat(),
         "endpoints": {
             "documentacion": "/docs",
@@ -264,7 +253,7 @@ async def health_check():
 
         return {
             "status": "✅ Saludable" if system_healthy else "⚠️ Problemas detectados",
-            "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
+            "environment": "Local",
             "timestamp": datetime.now().isoformat(),
             "components": {
                 "database": "✅ Conectado" if db_connected else "❌ Desconectado",
@@ -280,7 +269,7 @@ async def health_check():
             content={
                 "status": "❌ Error",
                 "error": str(e),
-                "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
+                "environment": "Local",
                 "timestamp": datetime.now().isoformat()
             }
         )
@@ -318,7 +307,7 @@ async def info_sistema():
             "sistema": {
                 "nombre": "Sistema de Reconocimiento Facial",
                 "version": "1.0.0",
-                "environment": "Railway" if RAILWAY_ENVIRONMENT else "Local",
+                "environment": "Local",
                 "estado": "Activo",
                 "timestamp": datetime.now().isoformat()
             },
@@ -369,18 +358,14 @@ async def internal_error_handler(request, exc):
     )
 
 
-# Configuración para desarrollo y Railway
 if __name__ == "__main__":
-    if RAILWAY_ENVIRONMENT:
-        print("🚂 Iniciando en Railway...")
-    else:
-        print("🔧 Iniciando en modo desarrollo...")
+    print("Iniciando en modo desarrollo local...")
 
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=PORT,
-        reload=False if RAILWAY_ENVIRONMENT else True,
+        reload=True,
         log_level="info",
         access_log=True
     )

@@ -250,8 +250,7 @@ class ConfiguracionSistema(BaseModel):
     lbp_weight: float = Field(0.4, ge=0.0, le=1.0, description="Peso del algoritmo LBP")
     umbral_confianza: float = Field(70.0, ge=0.0, le=100.0, description="Umbral de confianza para reconocimiento")
     metodo_combinacion: str = Field("weighted_average", description="Método de combinación de algoritmos")
-    max_imagenes_por_persona: int = Field(5, ge=1, le=10, description="Máximo de imágenes por persona")
-
+    max_imagenes_por_persona: int = Field(15, ge=1, le=20, description="Máximo de imágenes por persona")
     @validator('eigenfaces_weight', 'lbp_weight')
     def validate_weights_sum(cls, v, values):
         if 'eigenfaces_weight' in values and 'lbp_weight' in values:

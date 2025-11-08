@@ -39,18 +39,8 @@ else:
     DB_NAME = os.getenv('DB_NAME', 'face_recognition_db')
     DB_PORT = os.getenv('DB_PORT', '3306')
 
-# Verificar que tenemos todas las variables críticas
-if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
-    missing = []
-    if not DB_HOST: missing.append('DB_HOST/MYSQLHOST')
-    if not DB_USER: missing.append('DB_USER/MYSQLUSER')
-    if not DB_PASSWORD: missing.append('DB_PASSWORD/MYSQLPASSWORD')
-    if not DB_NAME: missing.append('DB_NAME/MYSQLDATABASE')
-
-    print(f"❌ Variables faltantes: {', '.join(missing)}")
-    if RAILWAY_ENVIRONMENT:
-        print("💡 Verifica que el servicio MySQL esté conectado en Railway")
-    raise ValueError(f"Variables de entorno de base de datos faltantes: {', '.join(missing)}")
+if not DB_PASSWORD or not DB_NAME:
+    print("⚠️ Advertencia: Configura DB_PASSWORD y DB_NAME en el archivo .env")
 
 # Codificar la contraseña para URLs (maneja caracteres especiales)
 encoded_password = quote_plus(DB_PASSWORD)
@@ -61,33 +51,18 @@ DATABASE_URL = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT
 print(f"🔗 Conectando a: mysql+pymysql://{DB_USER}:****@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 
 # Configuración del engine según el entorno
-if ENVIRONMENT == 'production' or RAILWAY_ENVIRONMENT:
-    # Configuración optimizada para Railway
-    engine_config = {
-        "echo": False,
-        "pool_pre_ping": True,
-        "pool_recycle": 300,
-        "pool_size": 3,  # Reducido para Railway
-        "max_overflow": 5,
-        "connect_args": {
-            "charset": "utf8mb4",
-            "connect_timeout": 60,
-            "read_timeout": 30,
-            "write_timeout": 30,
-            "autocommit": True
-        }
+engine_config = {
+    "echo": False,
+    "pool_pre_ping": True,
+    "pool_recycle": 3600,
+    "pool_size": 5,
+    "max_overflow": 10,
+    "connect_args": {
+        "charset": "utf8mb4",
+        "connect_timeout": 30
     }
-    print("🚀 Configuración de PRODUCCIÓN aplicada")
-else:
-    # Configuración para desarrollo local
-    engine_config = {
-        "echo": False,
-        "pool_pre_ping": True,
-        "pool_recycle": 300,
-        "pool_size": 10,
-        "max_overflow": 20
-    }
-    print("🔧 Configuración de DESARROLLO aplicada")
+}
+print("Configuración de base de datos LOCAL aplicada")
 
 # Crear el engine
 try:
