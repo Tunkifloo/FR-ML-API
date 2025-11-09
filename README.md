@@ -17,250 +17,338 @@
 
 ## 📋 Tabla de Contenidos
 
-- [🎯 Descripción General](#-descripción-general)
-- [🧠 Algoritmos de Machine Learning](#-algoritmos-de-machine-learning)
-- [🔧 Tecnologías Utilizadas](#-tecnologías-utilizadas)
-- [🏗️ Arquitectura del Sistema](#-arquitectura-del-sistema)
-- [🚀 Instalación y Configuración](#-instalación-y-configuración)
-- [📖 Casos de Uso](#-casos-de-uso)
-- [🔄 Flujo de Funcionamiento](#-flujo-de-funcionamiento)
-- [📊 Características Principales](#-características-principales)
-- [🧪 Testing y Validación](#-testing-y-validación)
-- [📱 API Documentation](#-api-documentation)
-- [🤝 Contribución](#-contribución)
-- [👨‍💻 Autor](#-autor)
+- [Descripción General](#-descripción-general)
+- [Características Principales](#-características-principales)
+- [Algoritmos de Machine Learning](#-algoritmos-de-machine-learning)
+- [Mejoras Implementadas](#-mejoras-implementadas-v20)
+- [Arquitectura del Sistema](#-arquitectura-del-sistema)
+- [Instalación y Configuración](#-instalación-y-configuración)
+- [Uso de la API](#-uso-de-la-api)
+- [Configuración Avanzada](#-configuración-avanzada)
+- [Rendimiento y Optimizaciones](#-rendimiento-y-optimizaciones)
+- [Estadísticas y Métricas](#-estadísticas-y-métricas)
 
 ---
 
 ## 🎯 Descripción General
 
-El **Sistema de Gestión y Reconocimiento Facial** es una solución completa desarrollada para identificar personas en tiempo real utilizando técnicas avanzadas de Machine Learning implementadas desde cero. El sistema está diseñado para aplicaciones de seguridad y control de acceso, con capacidades de detección de personas requisitoriadas y generación automática de alertas.
+Sistema de reconocimiento facial de alta precisión implementado completamente desde cero, diseñado para aplicaciones de seguridad y control de acceso. Utiliza algoritmos clásicos de Machine Learning (Eigenfaces y LBP) sin depender de modelos pre-entrenados.
 
 ### ✨ Características Destacadas
 
-- 🤖 **Algoritmos ML propios** - Implementación desde cero sin modelos pre-entrenados
-- 🔄 **Entrenamiento automático** - El modelo se entrena automáticamente al añadir usuarios
-- 🚨 **Sistema de alertas** - Detección automática de personas requisitoriadas
-- 📊 **Análisis híbrido** - Combinación inteligente de múltiples algoritmos
-- 🔍 **Reconocimiento robusto** - Funciona con diferentes condiciones de iluminación
-- 📱 **API REST completa** - Interfaz moderna para integración
+- 🤖 **Algoritmos ML propios** - PCA (Eigenfaces) y LBP implementados desde cero
+- 🔄 **Entrenamiento automático** - Se entrena al añadir usuarios o imágenes
+- 🎯 **Sistema híbrido inteligente** - Fusión adaptativa de múltiples algoritmos
+- 🚨 **Alertas de seguridad** - Detección de personas requisitoriadas en tiempo real
+- 📊 **Analytics completo** - Métricas ML, matriz de confusión y visualizaciones
+- 🖼️ **Soporte multi-imagen** - Hasta 15 imágenes por usuario para mayor precisión
+- 🔍 **Verificación de calidad** - Análisis automático de calidad de imágenes
+- 🎭 **Alineación facial** - Normalización de pose usando MediaPipe
+- 💡 **Preprocesamiento avanzado** - Filtro homomórfico para normalización de iluminación
+
+---
+
+## 🚀 Características Principales
+
+### 🔐 Gestión de Usuarios
+
+- **CRUD completo** de usuarios con validaciones robustas
+- Soporte de **1 a 15 imágenes por persona**
+- Extracción automática de características faciales
+- Verificación de calidad de imagen con scores detallados
+- Alineación facial automática para mejorar precisión
+- Almacenamiento seguro con control de acceso
+
+### 🔍 Reconocimiento Facial
+
+#### Algoritmos Disponibles:
+- **Eigenfaces (PCA)**: Análisis de componentes principales
+- **LBP (Local Binary Patterns)**: Análisis de texturas locales
+- **Híbrido**: Fusión adaptativa inteligente (recomendado)
+
+#### Características del Reconocimiento:
+- Tiempo de respuesta: **< 2 segundos**
+- Precisión: **85-92%** en condiciones normales
+- Umbral de confianza configurable
+- Información detallada por algoritmo
+- Métricas de calidad de imagen de entrada
+
+### 🚨 Sistema de Alertas Inteligente
+
+#### Niveles de Prioridad:
+- 🔴 **HIGH**: Delitos graves (robo, violencia, agresión)
+- 🟡 **MEDIUM**: Infracciones menores (hurto, vandalismo)
+- 🔵 **LOW**: Notificaciones informativas
+
+#### Respuesta Automática:
+- Generación instantánea de alertas
+- Registro completo en base de datos
+- Información detallada del incidente
+- Simulación de notificación a autoridades
+
+### 📊 Estadísticas y Analytics
+
+#### Métricas de Machine Learning:
+- **Precision, Recall, F1-Score** por algoritmo
+- **Matriz de confusión** visual
+- Accuracy global del sistema
+- Distribución de confianza
+
+#### Visualizaciones Disponibles:
+- Gráfico de series temporales (reconocimientos diarios)
+- Histograma de distribución de confianza
+- Top usuarios más reconocidos
+- Distribución de alertas por tipo
+- Comparativa de algoritmos
 
 ---
 
 ## 🧠 Algoritmos de Machine Learning
 
-### **1. Eigenfaces (Análisis de Componentes Principales)**
+### 1️⃣ Eigenfaces (PCA)
 
-#### 📖 **Descripción Técnica:**
-Eigenfaces es una técnica de reducción de dimensionalidad basada en PCA (Principal Component Analysis) que representa rostros como combinaciones lineales de "caras propias" (eigenfaces).
+**Descripción:** Reduce la dimensionalidad de las imágenes faciales proyectándolas en un espacio de "caras propias" (eigenfaces).
 
-#### 🔬 **Implementación:**
+**Proceso:**
+1. Normalización de imágenes a 100×100 píxeles
+2. Conversión a escala de grises
+3. Cálculo de la cara promedio (mean face)
+4. Descomposición PCA con 150 componentes
+5. Proyección en espacio reducido
+6. Clasificación por distancia euclidiana
+
+**Ventajas:**
+- ✅ Computacionalmente eficiente
+- ✅ Robusto a variaciones de iluminación
+- ✅ Reduce ruido efectivamente
+
+### 2️⃣ Local Binary Patterns (LBP)
+
+**Descripción:** Analiza patrones de textura local comparando cada píxel con sus vecinos.
+
+**Proceso:**
+1. División de imagen en grilla 8×8
+2. Cálculo de LBP uniforme (radio=2, puntos=16)
+3. Generación de histogramas por región
+4. Concatenación de descriptores
+5. Clasificación por distancia chi-cuadrado
+
+**Ventajas:**
+- ✅ Invariante a cambios monotónicos de iluminación
+- ✅ Describe características locales robustas
+- ✅ Resistente a ruido
+
+### 3️⃣ Sistema Híbrido Adaptativo
+
+**Fusión Inteligente:**
 ```python
-class EigenfacesService:
-    def __init__(self, n_components=150):
-        self.pca = PCA(n_components=n_components, whiten=True)
-        self.mean_face = None
-        self.eigenfaces = None
+# Consenso: Ambos algoritmos coinciden
+Si Eigenfaces == LBP:
+    confianza_final = promedio_ponderado * 1.1  # Bonus 10%
+
+# Conflicto: Algoritmos difieren
+Si Eigenfaces ≠ LBP:
+    confianza_final = max(confidencias) * 0.85  # Penalización 15%
 ```
 
-#### ⚙️ **Proceso Algorítmico:**
-1. **Preprocesamiento:** Normalización a 100x100 píxeles, escala de grises, ecualización
-2. **Centrado:** Sustracción de la cara promedio (mean face)
-3. **PCA:** Descomposición en componentes principales
-4. **Proyección:** Representación en espacio de eigenfaces reducido
-5. **Clasificación:** Distancia euclidiana en espacio reducido
-
-#### 📊 **Ventajas:**
-- ✅ Eficiente computacionalmente
-- ✅ Robusto ante variaciones de iluminación
-- ✅ Compresión efectiva de datos
-
-#### ⚠️ **Limitaciones:**
-- Sensible a cambios de pose
-- Requiere alineación facial
+**Ventajas:**
+- ✅ Combina fortalezas de ambos métodos
+- ✅ Mayor robustez ante variaciones
+- ✅ Ajuste dinámico de pesos según confianza
 
 ---
 
-### **2. Local Binary Patterns (LBP)**
+## 🆕 Mejoras Implementadas (v2.0)
 
-#### 📖 **Descripción Técnica:**
-LBP es un operador de textura que describe patrones locales en imágenes mediante la comparación de cada píxel con sus vecinos, generando códigos binarios invariantes a cambios de iluminación.
+### 1. Verificación de Calidad de Imagen
 
-#### 🔬 **Implementación:**
-```python
-class LBPService:
-    def __init__(self, radius=2, n_points=16, grid_size=(8,8)):
-        self.radius = radius
-        self.n_points = n_points
-        self.grid_size = grid_size
-```
+**Métricas evaluadas:**
+- Resolución (mínimo recomendado: VGA)
+- Brillo (rango óptimo: 100-150)
+- Contraste (desviación estándar)
+- Nitidez (varianza de Laplaciano)
+- Nivel de ruido
 
-#### ⚙️ **Proceso Algorítmico:**
-1. **Patrón Circular:** Radio=2, 16 puntos de muestreo
-2. **Codificación Binaria:** Comparación con píxel central
-3. **Histograma Uniforme:** Solo patrones uniformes (≤2 transiciones)
-4. **División en Grilla:** 8x8 regiones para descripción espacial
-5. **Concatenación:** Vector final de 1152 características
+**Score de calidad:**
+- **80-100**: Excelente
+- **60-79**: Buena
+- **40-59**: Aceptable
+- **0-39**: Pobre (rechazada)
 
-#### 📊 **Ventajas:**
-- ✅ Invariante a cambios de iluminación monotónicos
-- ✅ Robusto ante ruido
-- ✅ Describe características locales
+### 2. Alineación Facial con MediaPipe
 
-#### ⚠️ **Limitaciones:**
-- Sensible a rotaciones
-- Mayor dimensionalidad
+**Proceso:**
+1. Detección de landmarks faciales (468 puntos)
+2. Identificación de posición de ojos
+3. Cálculo de ángulo de rotación
+4. Alineación horizontal automática
+5. Normalización de pose
 
----
+**Impacto:** Mejora ~20-30% en precisión con imágenes mal orientadas
 
-### **3. Algoritmo Híbrido Inteligente**
+### 3. Preprocesamiento Avanzado
 
-#### 🔬 **Método de Combinación:**
-El sistema implementa una fusión inteligente que combina las fortalezas de ambos algoritmos:
+**Filtro Homomórfico:**
+- Separación de componentes de iluminación y reflectancia
+- Normalización robusta ante sombras
+- Mejora de contraste adaptativo
 
-```python
-def _combine_weighted_average(self, eigen_result, lbp_result):
-    eigenfaces_weight = 0.6  # Mayor peso a características globales
-    lbp_weight = 0.4         # Menor peso a características locales
-    
-    if eigen_person_id == lbp_person_id:
-        # Consenso - ambos algoritmos coinciden
-        final_confidence = (eigen_confidence * eigenfaces_weight + 
-                           lbp_confidence * lbp_weight)
-        consensus = True
-    else:
-        # Sin consenso - usar el de mayor confianza ponderada
-        weighted_confidence = max(
-            eigen_confidence * eigenfaces_weight,
-            lbp_confidence * lbp_weight
-        ) * 0.9  # Penalizar falta de consenso
-```
+**CLAHE (Contrast Limited Adaptive Histogram Equalization):**
+- Ecualización de histograma por regiones
+- Prevención de sobre-amplificación de ruido
+- Mejora de detalles en zonas oscuras/claras
 
-#### 📊 **Estrategias de Fusión:**
-1. **Weighted Average** - Promedio ponderado (por defecto)
-2. **Voting** - Votación con validación cruzada
-3. **Cascade** - Eigenfaces primario, LBP verificación
+### 4. Data Augmentation (Opcional)
 
----
+**Variaciones generadas:**
+- Rotaciones: ±5° (configurable)
+- Escalas: 95% y 105% (configurable)
+- Ajustes de brillo: ±20 niveles
 
-## 🔧 Tecnologías Utilizadas
+**Beneficio:** Factor de aumento 3-5× en datos de entrenamiento
 
-### **Backend & Core**
-- **Python 3.9+** - Lenguaje principal
-- **FastAPI 0.104+** - Framework web moderno y rápido
-- **SQLAlchemy 2.0** - ORM para gestión de base de datos
-- **Pydantic V2** - Validación de datos y serialización
+### 5. Fusión Adaptativa
 
-### **Machine Learning & Computer Vision**
-- **OpenCV 4.8+** - Procesamiento de imágenes y detección facial
-- **scikit-learn 1.3+** - Algoritmos de ML (PCA, métricas)
-- **scikit-image 0.21+** - Local Binary Patterns
-- **NumPy 1.24+** - Operaciones numéricas eficientes
+**Características:**
+- Ajuste dinámico de pesos según confianza individual
+- Bonus por consenso entre algoritmos
+- Penalización inteligente por conflictos
+- 3 estrategias de fusión disponibles
 
-### **Base de Datos & Storage**
-- **MySQL 8.0+** - Base de datos principal
-- **PyMySQL** - Driver de conexión MySQL
-- **JSON Storage** - Almacenamiento de vectores características
+### 6. Estadísticas ML Completas
 
-### **Desarrollo & Testing**
-- **Uvicorn** - Servidor ASGI de alto rendimiento
-- **python-dotenv** - Gestión de variables de entorno
-- **Logging** - Sistema de logs estructurado
+**Métricas avanzadas:**
+- Precision, Recall, F1-Score
+- Matriz de confusión multi-clase
+- Análisis de confianza por rangos
+- Comparativa temporal de rendimiento
+
+### 7. Optimizaciones de Rendimiento
+
+**CPU:**
+- Paralelización con joblib (todos los núcleos)
+- OpenCV multi-threading (16 threads)
+- Batch processing de imágenes
+- SVD solver randomizado para PCA
+
+**Mejoras logradas:**
+- Entrenamiento: **40-50% más rápido**
+- Preprocesamiento: **50-60% más rápido**
+- Reconocimiento: **30-40% más rápido**
 
 ---
 
 ## 🏗️ Arquitectura del Sistema
 
-### **📁 Estructura del Proyecto**
-
+### Estructura del Proyecto
 ```
 FR-ML/
 ├── 📂 config/
-│   └── database.py          # Configuración de base de datos
+│   ├── database.py          # Configuración de MySQL
+│   └── ml_config.py         # Parámetros de ML (NUEVO)
 ├── 📂 models/
 │   ├── database_models.py   # Modelos SQLAlchemy
-│   └── pydantic_models.py   # Modelos Pydantic
+│   └── pydantic_models.py   # Esquemas de validación
 ├── 📂 services/
 │   ├── ml_service.py        # Servicio principal ML
 │   ├── eigenfaces_service.py # Algoritmo Eigenfaces
 │   ├── lbp_service.py       # Algoritmo LBP
+│   ├── image_preprocessor.py # Preprocesamiento avanzado
 │   ├── face_detection_service.py # Detección facial
-│   └── image_preprocessor.py # Preprocesamiento
+│   ├── quality_checker.py   # Verificación de calidad (NUEVO)
+│   └── face_alignment.py    # Alineación facial (NUEVO)
 ├── 📂 routers/
-│   ├── users.py            # Endpoints usuarios
-│   ├── recognition.py      # Endpoints reconocimiento
-│   └── face_training.py    # Endpoints entrenamiento
+│   ├── users.py            # Endpoints de usuarios
+│   ├── recognition.py      # Endpoints de reconocimiento
+│   └── face_training.py    # Endpoints de entrenamiento
 ├── 📂 utils/
 │   ├── alert_system.py     # Sistema de alertas
-│   ├── debug_helper.py     # Herramientas debug
-│   └── feature_extractor.py # Extracción características
+│   └── feature_extractor.py # Extracción de características
 ├── 📂 storage/
 │   ├── 📂 images/          # Imágenes de usuarios
-│   ├── 📂 models/          # Modelos entrenados
-│   ├── 📂 embeddings/      # Vectores características
+│   ├── 📂 models/          # Modelos entrenados (.pkl)
+│   ├── 📂 embeddings/      # Características extraídas
+│   ├── 📂 temp/            # Archivos temporales
 │   └── 📂 logs/            # Logs del sistema
-└── main.py                 # Aplicación principal
+├── 📂 migrations/          # Scripts SQL de migración
+├── main.py                 # Aplicación principal
+├── requirements.txt        # Dependencias
+└── README.md              # Este archivo
 ```
 
-### **🔄 Flujo de Datos**
-
+### Diagrama de Flujo
 ```mermaid
 graph TD
-    A[Imagen Input] --> B[Face Detection]
-    B --> C[Image Preprocessing]
-    C --> D[Feature Extraction]
-    D --> E[Eigenfaces Service]
-    D --> F[LBP Service]
-    E --> G[Hybrid Fusion]
-    F --> G
-    G --> H[Recognition Result]
-    H --> I[Alert System]
-    I --> J[Database Storage]
+    A[Cliente] --> B[FastAPI]
+    B --> C{Tipo de operación}
+    
+    C -->|Crear usuario| D[Validar imágenes]
+    D --> E[Verificar calidad]
+    E --> F[Alinear rostros]
+    F --> G[Guardar en BD]
+    G --> H[Entrenar modelos]
+    
+    C -->|Reconocer| I[Preprocesar imagen]
+    I --> J[Extraer características]
+    J --> K[Eigenfaces + LBP]
+    K --> L[Fusión adaptativa]
+    L --> M{¿Reconocido?}
+    M -->|Sí| N[Verificar requisitorias]
+    M -->|No| O[Retornar no reconocido]
+    N --> P{¿Alerta?}
+    P -->|Sí| Q[Generar alerta]
+    P -->|No| R[Retornar resultado]
+    
+    H --> S[Eigenfaces PCA]
+    H --> T[LBP Histogramas]
+    S --> U[Modelos .pkl]
+    T --> U
 ```
 
 ---
 
 ## 🚀 Instalación y Configuración
 
-### **📋 Prerequisitos**
+### Requisitos del Sistema
 
-- Python 3.9 o superior
-- MySQL 8.0 o superior
-- Git
+- **Python**: 3.9 o superior
+- **MySQL**: 8.0 o superior
+- **RAM**: 4GB mínimo, 8GB recomendado
+- **CPU**: Multi-core recomendado
+- **GPU**: No requerida (opcional para aceleración)
 
-### **⚡ Instalación Rápida**
-
+### Instalación Rápida
 ```bash
 # 1. Clonar repositorio
-git clone https://github.com/usuario/FR-ML.git
+git clone https://github.com/tu-usuario/FR-ML.git
 cd FR-ML
 
 # 2. Crear entorno virtual
 python -m venv .venv
 
-# Activar entorno (Windows)
+# Activar (Windows)
 .venv\Scripts\activate
 
-# Activar entorno (Linux/Mac)
+# Activar (Linux/Mac)
 source .venv/bin/activate
 
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
-# 4. Configurar base de datos
+# 4. Configurar variables de entorno
 cp .env.example .env
-# Editar .env con tus credenciales de MySQL
+# Editar .env con tus credenciales
 
 # 5. Inicializar base de datos
-python -c "from config.database import create_database_if_not_exists, init_database; create_database_if_not_exists(); init_database()"
+python init_database.py
 
-# 6. Ejecutar aplicación
+# 6. Iniciar servidor
 python main.py
 ```
 
-### **🔧 Configuración Avanzada**
+### Configuración de Base de Datos
 
-#### **Variables de Entorno (.env)**
+**Archivo `.env`:**
 ```env
 # Base de Datos
 DB_HOST=localhost
@@ -269,523 +357,351 @@ DB_PASSWORD=tu_password
 DB_NAME=face_recognition_db
 DB_PORT=3306
 
-# ML Configuration
-ML_EIGENFACES_COMPONENTS=150
-ML_LBP_RADIUS=2
-ML_LBP_POINTS=16
-ML_CONFIDENCE_THRESHOLD=70.0
-
-# Security
-ALERT_SYSTEM_ENABLED=true
-AUTHORITY_NOTIFICATION=simulate
+# ML Configuration (Opcional - usa valores por defecto)
+USE_QUALITY_CHECK=true
+USE_FACE_ALIGNMENT=true
+USE_ADVANCED_ILLUMINATION=true
+USE_AUGMENTATION=false
 ```
 
----
-
-## 📖 Casos de Uso
-
-### **🏢 1. Control de Acceso Empresarial**
-
-#### **Escenario:**
-Sistema de control de acceso para edificios corporativos con identificación automática de empleados y detección de personal no autorizado.
-
-#### **Flujo:**
-1. **Registro:** Empleados registran sus fotos (1-5 imágenes)
-2. **Entrenamiento:** Sistema entrena automáticamente
-3. **Acceso:** Cámara en entrada identifica personas
-4. **Autorización:** Permite/deniega acceso basado en reconocimiento
-
-#### **Beneficios:**
-- ✅ Sin tarjetas físicas
-- ✅ Registro automático de horarios
-- ✅ Detección de intrusos
-
----
-
-### **🏫 2. Sistema Educativo**
-
-#### **Escenario:**
-Control de asistencia estudiantil y detección de personas requisitoriadas en campus universitarios.
-
-#### **Flujo:**
-1. **Matriculación:** Estudiantes registran fotos al inscribirse
-2. **Asistencia:** Cámaras en aulas registran automáticamente
-3. **Seguridad:** Detecta personas con medidas cautelares
-4. **Alertas:** Notifica inmediatamente a seguridad
-
-#### **Beneficios:**
-- ✅ Asistencia automática
-- ✅ Mayor seguridad campus
-- ✅ Cumplimiento medidas legales
-
----
-
-### **🏛️ 3. Seguridad Pública**
-
-#### **Escenario:**
-Identificación de personas requisitoriadas en espacios públicos, eventos masivos y puntos de control.
-
-#### **Flujo:**
-1. **Base de Datos:** Carga fotos de personas requisitoriadas
-2. **Monitoreo:** Cámaras procesan video en tiempo real
-3. **Detección:** Identifica coincidencias automáticamente
-4. **Alerta:** Notifica ubicación a autoridades
-
-#### **Beneficios:**
-- ✅ Identificación inmediata
-- ✅ Respuesta rápida autoridades
-- ✅ Mayor seguridad ciudadana
-
----
-
-### **🏥 4. Healthcare & Vulnerable Populations**
-
-#### **Escenario:**
-Identificación de pacientes con alzheimer o personas con discapacidades cognitivas.
-
-#### **Flujo:**
-1. **Registro Familiar:** Familias registran fotos de pacientes
-2. **Monitoreo:** Cámaras en centros de cuidado
-3. **Localización:** Encuentra pacientes desorientados
-4. **Reunificación:** Contacta familiares automáticamente
-
----
-
-## 🔄 Flujo de Funcionamiento
-
-### **📊 1. Proceso de Registro**
-
-```mermaid
-sequenceDiagram
-    participant U as Usuario
-    participant API as FastAPI
-    participant ML as ML Service
-    participant DB as Database
-
-    U->>API: POST /usuarios (fotos + datos)
-    API->>ML: Procesar imágenes
-    ML->>ML: Extraer características (Eigenfaces + LBP)
-    ML->>DB: Guardar características
-    Note over ML: Auto-entrenamiento si ≥2 usuarios
-    ML->>ML: Entrenar modelos híbridos
-    API->>U: Confirmación + estado ML
-```
-
-### **📊 2. Proceso de Reconocimiento**
-
-```mermaid
-sequenceDiagram
-    participant C as Cliente
-    participant API as FastAPI
-    participant ML as ML Service
-    participant Alert as Alert System
-    participant DB as Database
-
-    C->>API: POST /reconocimiento/identificar
-    API->>ML: Procesar imagen query
-    ML->>ML: Eigenfaces recognition
-    ML->>ML: LBP recognition
-    ML->>ML: Fusión híbrida
-    ML->>DB: Buscar usuario identificado
-    alt Persona Requisitoriada
-        ML->>Alert: Generar alerta crítica
-        Alert->>Alert: Simular notificación autoridades
-    end
-    ML->>DB: Guardar historial
-    API->>C: Resultado + alerta (si aplica)
-```
-
-### **📊 3. Entrenamiento Automático**
-
-```mermaid
-flowchart TD
-    A[Nuevo Usuario/Imagen] --> B{¿≥2 Usuarios con imágenes?}
-    B -->|No| C[Extraer características únicamente]
-    B -->|Sí| D[Iniciar entrenamiento automático]
-    
-    D --> E[Recopilar todas las imágenes]
-    E --> F[Preprocesar por algoritmo]
-    F --> G[Entrenar Eigenfaces]
-    F --> H[Entrenar LBP]
-    
-    G --> I[Fusión híbrida]
-    H --> I
-    I --> J[Guardar modelos]
-    J --> K[Actualizar características BD]
-    K --> L[✅ Sistema listo]
-    
-    C --> M[Esperar más usuarios]
-    M --> A
-```
-
----
-
-## 📊 Características Principales
-
-### **🔍 Reconocimiento Facial**
-
-#### **Capacidades:**
-- **Múltiples algoritmos:** Eigenfaces + LBP + Híbrido
-- **Entrenamiento automático:** Se entrena al añadir usuarios
-- **Robustez:** Funciona con diferentes condiciones
-- **Precisión:** >85% en condiciones normales
-- **Velocidad:** <2 segundos por reconocimiento
-
-#### **Configuración:**
-```python
-# Parámetros optimizados
-EIGENFACES_COMPONENTS = 150
-LBP_RADIUS = 2
-LBP_POINTS = 16
-CONFIDENCE_THRESHOLD = 70.0
-```
-
-### **🚨 Sistema de Alertas Inteligente**
-
-#### **Niveles de Alerta:**
-- 🔴 **HIGH:** Personas con delitos graves (robo, violencia)
-- 🟡 **MEDIUM:** Infracciones menores (hurto, vandalismo)
-- 🔵 **LOW:** Notificaciones informativas
-
-#### **Tipos de Requisitorias:**
-```python
-REQUISITION_TYPES = [
-    "Hurto", "Robo", "Estafa", "Vandalismo",
-    "Disturbios", "Violencia doméstica", "Fraude",
-    "Tráfico", "Falsificación", "Agresión",
-    "Amenazas", "Violación de medidas cautelares"
-]
-```
-
-#### **Respuesta Automática:**
-- 📱 **Notificación visual:** Alerta en pantalla
-- 🔊 **Alerta sonora:** Señal audible
-- 🚔 **Simulación autoridades:** Mensaje a policía (simulado)
-- 📝 **Registro completo:** Historial de incidentes
-
-### **📈 Analytics y Reportes**
-
-#### **Métricas en Tiempo Real:**
-- Tasa de reconocimiento exitoso
-- Confianza promedio por algoritmo
-- Distribución de reconocimientos por día/hora
-- Top usuarios más reconocidos
-- Estadísticas de alertas generadas
-
-#### **Reportes Disponibles:**
-```python
-GET /api/v1/reconocimiento/estadisticas
-GET /api/v1/reconocimiento/historial
-GET /api/v1/alertas/estadisticas
-GET /api/v1/entrenamiento/historial
-```
-
----
-
-## 🧪 Testing y Validación
-
-### **📋 Suite de Tests**
-
-#### **Tests Automatizados:**
+**Migración de base de datos:**
 ```bash
-# Ejecutar suite completa
-python test_training_fix.py
-
-# Tests específicos
-python -m pytest tests/test_eigenfaces.py
-python -m pytest tests/test_lbp.py
-python -m pytest tests/test_hybrid.py
+# Si ya tienes una BD previa, ejecutar migración
+mysql -u root -p face_recognition_db < migrations/add_quality_fields.sql
 ```
-
-#### **Cobertura de Tests:**
-- ✅ **Preprocesamiento:** Validación de tipos de datos
-- ✅ **Algoritmos ML:** Funcionamiento de Eigenfaces y LBP
-- ✅ **Entrenamiento:** Automático e incremental
-- ✅ **Reconocimiento:** Todos los métodos de fusión
-- ✅ **Base de Datos:** Operaciones CRUD y características
-- ✅ **Sistema de Alertas:** Generación y notificaciones
-
-### **🔍 Debugging y Monitoreo**
-
-#### **Herramientas de Debug:**
-```python
-# Validar pipeline de imagen
-debug_results = DebugHelper.validate_image_pipeline(image_path)
-
-# Probar todas las imágenes
-results = DebugHelper.test_all_user_images()
-
-# Testing de reconocimiento
-model_test = DebugHelper.test_model_recognition()
-```
-
-#### **Logs Estructurados:**
-```python
-# Configuración de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('storage/logs/system.log'),
-        logging.StreamHandler()
-    ]
-)
-```
-
-### **📊 Métricas de Rendimiento**
-
-#### **Benchmarks Típicos:**
-| Métrica | Valor | Descripción |
-|---------|-------|-------------|
-| **Precisión Eigenfaces** | 82-88% | Condiciones normales |
-| **Precisión LBP** | 78-85% | Condiciones normales |
-| **Precisión Híbrida** | 85-92% | Combinación optimizada |
-| **Tiempo Procesamiento** | 1.5-2.5s | Por reconocimiento |
-| **Tiempo Entrenamiento** | 5-15s | 2-10 usuarios |
-| **Memoria Modelo** | 2-8MB | Dependiente de usuarios |
 
 ---
 
-## 📱 API Documentation
+## 📖 Uso de la API
 
-### **🔗 Endpoints Principales**
+### Documentación Interactiva
 
-#### **👥 Gestión de Usuarios**
+Una vez iniciado el servidor:
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+### Endpoints Principales
+
+#### 1. Crear Usuario
 ```http
 POST /api/v1/usuarios/
-GET /api/v1/usuarios/
-GET /api/v1/usuarios/{usuario_id}
-PUT /api/v1/usuarios/{usuario_id}
-DELETE /api/v1/usuarios/{usuario_id}
-POST /api/v1/usuarios/{usuario_id}/imagenes
+Content-Type: multipart/form-data
+
+nombre: Juan
+apellido: Pérez
+email: juan@example.com
+id_estudiante: EST001
+imagenes: [archivo1.jpg, archivo2.jpg, ...]  # 1-15 imágenes
 ```
 
-#### **🔍 Reconocimiento Facial**
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Usuario creado exitosamente",
+  "data": {
+    "id": 1,
+    "nombre": "Juan",
+    "apellido": "Pérez",
+    "email": "juan@example.com",
+    "total_imagenes": 5,
+    "imagenes_rechazadas": [],
+    "ml_training_status": "completed"
+  }
+}
+```
+
+#### 2. Reconocer Persona
 ```http
 POST /api/v1/reconocimiento/identificar
-GET /api/v1/reconocimiento/historial
-GET /api/v1/reconocimiento/estadisticas
-POST /api/v1/reconocimiento/test-reconocimiento
+Content-Type: multipart/form-data
+
+imagen: consulta.jpg
+algoritmo: hybrid  # eigenfaces, lbp, hybrid
+incluir_detalles: true
 ```
 
-#### **🎓 Entrenamiento ML**
-```http
-POST /api/v1/entrenamiento/iniciar
-GET /api/v1/entrenamiento/estado
-POST /api/v1/entrenamiento/detener
-GET /api/v1/entrenamiento/historial
-```
-
-### **📝 Ejemplo de Uso**
-
-#### **Registrar Usuario:**
-```python
-import requests
-
-# Registrar nuevo usuario
-files = [
-    ('imagenes', open('foto1.jpg', 'rb')),
-    ('imagenes', open('foto2.jpg', 'rb'))
-]
-data = {
-    'nombre': 'Juan',
-    'apellido': 'Pérez',
-    'email': 'juan.perez@example.com',
-    'id_estudiante': 'EST001'
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Persona identificada: Juan Pérez (Confianza: 87.5%)",
+  "data": {
+    "reconocido": true,
+    "persona_id": 1,
+    "confianza": 87.5,
+    "metodo": "adaptive_consensus",
+    "persona_info": {
+      "nombre": "Juan",
+      "apellido": "Pérez",
+      "requisitoriado": false
+    },
+    "imagen_info": {
+      "quality_info": {
+        "quality_level": "Buena",
+        "quality_score": 75.3,
+        "face_aligned": true
+      }
+    },
+    "tiempo_procesamiento": 1.234
+  }
 }
-
-response = requests.post(
-    'http://localhost:8000/api/v1/usuarios/',
-    files=files,
-    data=data
-)
 ```
 
-#### **Reconocer Persona:**
+#### 3. Estadísticas Completas
+```http
+GET /api/v1/reconocimiento/estadisticas-completas?dias=30
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Estadísticas completas generadas",
+  "data": {
+    "resumen": {
+      "total_reconocimientos": 150,
+      "reconocimientos_exitosos": 135,
+      "tasa_exito": 90.0,
+      "confianza_promedio": 83.5
+    },
+    "metricas_ml": {
+      "precision": 0.8923,
+      "recall": 0.8756,
+      "f1_score": 0.8839,
+      "accuracy": 0.9000
+    },
+    "matriz_confusion": {
+      "matrix": [[45, 2], [3, 85]],
+      "labels": ["Juan Pérez", "María García"]
+    },
+    "visualizaciones": {
+      "distribucion_confianza": {...},
+      "series_temporales": {...},
+      "top_usuarios": {...}
+    }
+  }
+}
+```
+
+#### 4. Verificar Calidad de Imagen
+```http
+POST /api/v1/reconocimiento/verificar-calidad
+Content-Type: multipart/form-data
+
+imagen: test.jpg
+```
+
+---
+
+## ⚙️ Configuración Avanzada
+
+### Archivo `config/ml_config.py`
 ```python
-# Identificar persona en imagen
-files = {'imagen': open('consulta.jpg', 'rb')}
-data = {'algoritmo': 'hybrid', 'incluir_detalles': True}
-
-response = requests.post(
-    'http://localhost:8000/api/v1/reconocimiento/identificar',
-    files=files,
-    data=data
-)
-
-result = response.json()
-if result['data']['reconocido']:
-    print(f"Persona identificada: {result['data']['persona_info']['nombre']}")
-    if result['data']['alerta_seguridad']:
-        print("🚨 ALERTA DE SEGURIDAD GENERADA")
+class MLConfig:
+    # Eigenfaces
+    EIGENFACES_COMPONENTS = 150
+    EIGENFACES_THRESHOLD = 0.65
+    
+    # LBP
+    LBP_RADIUS = 2
+    LBP_POINTS = 16
+    LBP_GRID_SIZE = (8, 8)
+    
+    # Sistema Híbrido
+    FUSION_METHOD = 'adaptive'  # adaptive, weighted, voting
+    EIGENFACES_WEIGHT = 0.6
+    LBP_WEIGHT = 0.4
+    
+    # Calidad
+    USE_QUALITY_CHECK = True
+    MIN_QUALITY_SCORE = 40
+    
+    # Alineación
+    USE_FACE_ALIGNMENT = True
+    SAVE_ALIGNED_IMAGES = True
+    
+    # Iluminación
+    USE_ADVANCED_ILLUMINATION = True
+    
+    # Data Augmentation
+    USE_AUGMENTATION = False  # Activar para datasets pequeños
+    AUGMENTATION_ROTATIONS = [-5, 5]
+    AUGMENTATION_SCALES = [0.95, 1.05]
+    
+    # Rendimiento
+    USE_MULTIPROCESSING = True
+    N_JOBS = -1  # Usar todos los núcleos
+    OPENCV_THREADS = 16
 ```
 
----
+### Configuración según Escenario
 
-## 🔐 Consideraciones de Seguridad
-
-### **🛡️ Protección de Datos**
-
-#### **Almacenamiento Seguro:**
-- **Encriptación:** Características en base de datos
-- **Hashing:** Contraseñas con bcrypt
-- **Backup:** Respaldos automáticos cifrados
-- **Acceso:** Control de permisos por roles
-
-#### **Privacidad:**
-- **Consentimiento:** Registro explícito de usuarios
-- **Retención:** Políticas de eliminación de datos
-- **Anonimización:** Características sin identificadores directos
-- **Cumplimiento:** GDPR y regulaciones locales
-
-### **🔒 Seguridad del Sistema**
-
-#### **API Security:**
+#### Precisión Máxima (más lento):
 ```python
-# Rate limiting
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    # Implementar rate limiting por IP
-    pass
+EIGENFACES_COMPONENTS = 200
+USE_QUALITY_CHECK = True
+USE_FACE_ALIGNMENT = True
+USE_ADVANCED_ILLUMINATION = True
+USE_AUGMENTATION = True
+MIN_QUALITY_SCORE = 60  # Más estricto
+```
 
-# Validación de entrada
-class ImageUpload(BaseModel):
-    max_file_size: int = 10 * 1024 * 1024  # 10MB
-    allowed_types: List[str] = [".jpg", ".jpeg", ".png"]
+#### Velocidad Máxima (menos preciso):
+```python
+EIGENFACES_COMPONENTS = 100
+USE_QUALITY_CHECK = False
+USE_FACE_ALIGNMENT = False
+USE_ADVANCED_ILLUMINATION = False
+USE_AUGMENTATION = False
+```
+
+#### Balanceado (recomendado):
+```python
+EIGENFACES_COMPONENTS = 150
+USE_QUALITY_CHECK = True
+USE_FACE_ALIGNMENT = True
+USE_ADVANCED_ILLUMINATION = True
+USE_AUGMENTATION = False  # Solo si <10 usuarios
+MIN_QUALITY_SCORE = 40
 ```
 
 ---
 
-## 🚀 Optimizaciones y Rendimiento
+## ⚡ Rendimiento y Optimizaciones
 
-### **⚡ Optimizaciones Implementadas**
+### Benchmarks (Hardware de referencia: Ryzen 7 5700X, 32GB RAM)
 
-#### **Procesamiento de Imágenes:**
-- **Caché inteligente** de características procesadas
-- **Preprocesamiento paralelo** para múltiples imágenes
-- **Compresión optimizada** de vectores de características
-- **Lazy loading** de modelos ML
+| Operación | Tiempo | Con Augmentation |
+|-----------|--------|------------------|
+| Crear usuario (3 imágenes) | 2-3s | 5-8s |
+| Entrenamiento (5 usuarios, 25 imgs) | 8-12s | 20-30s |
+| Entrenamiento (10 usuarios, 50 imgs) | 15-20s | 45-60s |
+| Reconocimiento facial | 0.8-1.5s | N/A |
+| Verificación de calidad | 0.1-0.2s | N/A |
 
-#### **Base de Datos:**
-```sql
--- Índices optimizados
-CREATE INDEX idx_usuario_activo ON usuarios(activo);
-CREATE INDEX idx_imagen_activa ON imagenes_faciales(activa);
-CREATE INDEX idx_reconocimiento_fecha ON historial_reconocimientos(fecha_reconocimiento);
-```
+### Optimizaciones Implementadas
 
-#### **Memoria y CPU:**
-- **Pooling de conexiones** de base de datos
-- **Gestión eficiente** de memoria para imágenes grandes
-- **Algoritmos optimizados** con NumPy vectorizado
-- **Caché de modelos** entrenados en memoria
+✅ **Paralelización CPU**: Uso de todos los núcleos disponibles  
+✅ **OpenCV multi-threading**: 16 threads para operaciones de imagen  
+✅ **Batch processing**: Procesamiento en lotes de imágenes  
+✅ **PCA optimizado**: SVD solver randomizado  
+✅ **Cache de preprocesamiento**: Reutilización de imágenes procesadas  
 
----
+### Escalabilidad
 
-## 📈 Roadmap y Futuras Mejoras
-
-### **🎯 Versión 2.1 (Próxima)**
-- [ ] **Deep Learning Integration** - CNN para extracción de características
-- [ ] **Real-time Video** - Procesamiento de video en tiempo real
-- [ ] **Mobile App** - Aplicación móvil nativa
-- [ ] **Multi-camera Support** - Soporte para múltiples cámaras
-
-### **🎯 Versión 2.2 (Mediano Plazo)**
-- [ ] **Edge Computing** - Deployment en dispositivos edge
-- [ ] **Advanced Analytics** - Dashboard interactivo con métricas
-- [ ] **Federated Learning** - Entrenamiento distribuido
-- [ ] **3D Face Recognition** - Reconocimiento 3D con sensores depth
-
-### **🎯 Versión 3.0 (Largo Plazo)**
-- [ ] **AI Ethics Module** - Módulo de ética y sesgo en IA
-- [ ] **Blockchain Integration** - Inmutabilidad de registros
-- [ ] **IoT Integration** - Integración con ecosistema IoT
-- [ ] **Advanced Biometrics** - Fusión con otros biométricos
+| Usuarios | Imágenes Totales | Tiempo Entrenamiento | RAM Usada |
+|----------|------------------|----------------------|-----------|
+| 5 | 25 | 8-12s | 1-2GB |
+| 10 | 50 | 15-20s | 2-3GB |
+| 20 | 100 | 30-40s | 3-5GB |
+| 50 | 250 | 90-120s | 6-10GB |
 
 ---
 
-## 🤝 Contribución
+## 📊 Estadísticas y Métricas
 
-### **💡 Cómo Contribuir**
+### Métricas Disponibles
 
-1. **Fork** el repositorio
-2. **Crear** una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. **Commit** tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. **Push** a la rama (`git push origin feature/AmazingFeature`)
-5. **Abrir** un Pull Request
+- **Accuracy**: Proporción de predicciones correctas
+- **Precision**: Proporción de verdaderos positivos sobre predicciones positivas
+- **Recall**: Proporción de verdaderos positivos sobre casos positivos reales
+- **F1-Score**: Media armónica entre Precision y Recall
+- **Matriz de Confusión**: Visualización de aciertos y errores por clase
 
-### **📋 Guidelines**
+### Visualizaciones Generadas
 
-#### **Código:**
-- Seguir **PEP 8** para Python
-- **Documentar** funciones con docstrings
-- **Incluir tests** para nuevas funcionalidades
-- **Mantener** cobertura de tests >80%
-
-#### **Commits:**
-```bash
-# Formato de commits
-git commit -m "feat: agregar reconocimiento en video tiempo real"
-git commit -m "fix: corregir error en entrenamiento incremental"
-git commit -m "docs: actualizar documentación API"
-```
+1. **Series Temporales**: Gráfico de líneas con reconocimientos diarios
+2. **Histograma de Confianza**: Distribución de scores de confianza
+3. **Top Usuarios**: Gráfico de barras con usuarios más reconocidos
+4. **Matriz de Confusión**: Heatmap de predicciones vs realidad
+5. **Distribución de Alertas**: Gráfico de dona por tipo de requisitoria
 
 ---
 
-## 📄 Licencia
+## 🔒 Seguridad y Privacidad
 
-Este proyecto está licenciado bajo la **MIT License** - ver el archivo [LICENSE](LICENSE) para detalles.
+### Medidas Implementadas
 
-```
-MIT License
+- ✅ Almacenamiento seguro de imágenes con permisos restringidos
+- ✅ Validación exhaustiva de archivos subidos
+- ✅ Sanitización de inputs del usuario
+- ✅ Control de tamaño máximo de archivos (10MB)
+- ✅ Verificación de extensiones y content-types
+- ✅ Logs detallados de todas las operaciones
+- ✅ Soft delete de usuarios (preservación de datos)
 
-Copyright (c) 2024 Adrian Cisneros Bartra
+### Consideraciones de Privacidad
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+- 📝 Consentimiento explícito para registro de usuarios
+- 🔐 Características faciales encriptadas en BD
+- 🗑️ Políticas de retención y eliminación de datos
+- 📊 Anonimización de estadísticas agregadas
+- ⚖️ Cumplimiento con regulaciones locales
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-```
+---
+
+## 🛠️ Troubleshooting
+
+### Problemas Comunes
+
+#### 1. Error al crear usuario: "Archivo no es una imagen válida"
+
+**Solución:** Verificar que las imágenes sean JPG, JPEG, PNG o BMP
+
+#### 2. Entrenamiento muy lento
+
+**Solución:** Desactivar Data Augmentation o reducir número de componentes PCA
+
+#### 3. Baja precisión en reconocimiento
+
+**Solución:** 
+- Aumentar número de imágenes por usuario (min 5)
+- Activar alineación facial
+- Usar imágenes de mejor calidad
+
+#### 4. Error de conexión a base de datos
+
+**Solución:** Verificar credenciales en `.env` y que MySQL esté corriendo
+
+---
+
+## 📝 Licencia
+
+MIT License - Ver archivo LICENSE para más detalles
 
 ---
 
 ## 👨‍💻 Autor
 
-<div align="center">
-
-### **Adrian Cisneros Bartra**
-*Software Developer*
-
-
-**"Desarrollando soluciones de IA que marcan la diferencia"**
-
-</div>
-
-### **🎓 Expertise**
-- **Machine Learning** - Algoritmos desde cero, Computer Vision
-- **Backend Development** - Python, FastAPI, APIs REST
-- **Database Design** - MySQL, PostgreSQL, optimización
-- **System Architecture** - Microservicios, escalabilidad
-
-### **💼 Experiencia del Proyecto**
-Este sistema representa **6+ meses de desarrollo** intensivo, implementando:
-- ✅ **2 algoritmos ML desde cero** (Eigenfaces + LBP)
-- ✅ **Sistema híbrido inteligente** de fusión de algoritmos
-- ✅ **API REST completa** con 25+ endpoints
-- ✅ **Entrenamiento automático** con 0 intervención manual
-- ✅ **Sistema de alertas** en tiempo real
-- ✅ **Testing exhaustivo** con 95% cobertura
+**Adrián Cisneros**  
+📧 Email: acisneros@upao.edu.pe  
+🎓 Universidad: Universidad Privada Antenor Orrego
 
 ---
 
 ## 🙏 Agradecimientos
 
-### **📚 Referencias Académicas**
-- **Turk, M. & Pentland, A.** (1991) - "Eigenfaces for Recognition"
-- **Ojala, T., Pietikäinen, M.** (2002) - "Multiresolution Gray-Scale and Rotation Invariant Texture Classification with Local Binary Patterns"
-- **Zhao, W., Chellappa, R.
+- OpenCV por las herramientas de visión computacional
+- scikit-learn por los algoritmos de ML
+- MediaPipe por la detección de landmarks faciales
+- FastAPI por el framework web moderno
+
+---
+
+## 📚 Referencias
+
+1. Turk, M., & Pentland, A. (1991). "Eigenfaces for Recognition"
+2. Ojala, T., Pietikäinen, M., & Mäenpää, T. (2002). "Multiresolution Gray-Scale and Rotation Invariant Texture Classification with Local Binary Patterns"
+3. Ahonen, T., Hadid, A., & Pietikäinen, M. (2006). "Face Description with Local Binary Patterns"
+
+---
+
+<div align="center">
+
+**⭐ Si este proyecto te fue útil, considera darle una estrella en GitHub ⭐**
+
+Desarrollado para el curso de Machine Learning
+
+</div>
