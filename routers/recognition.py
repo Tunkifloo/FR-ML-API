@@ -319,7 +319,8 @@ async def identificar_persona(
                 imagen_consulta_path=temp_file_path,
                 confianza=int(response_data["confianza"]),
                 distancia_euclidiana=distancia_euclidiana,
-                reconocido=response_data["reconocido"],
+                algoritmo_usado=algoritmo,
+            reconocido=response_data["reconocido"],
                 alerta_generada=alerta_seguridad is not None and alerta_seguridad.get("alerta_generada", False),
                 caracteristicas_consulta=recognition_result.get("details", None),
                 ip_origen=client_ip
@@ -718,7 +719,7 @@ async def obtener_estadisticas_completas(
         for fecha, total, exitosos, alertas, conf_prom in reconocimientos_por_dia:
             series_temporales["labels"].append(fecha.isoformat())
             series_temporales["datasets"]["total"].append(total)
-            series_temporales["datasets"]["exitosos"].append(exitosos or 0)
+            series_temporales["datasets"]["exitosos"].append(int(exitosos) if exitosos else 0)
             series_temporales["datasets"]["alertas"].append(alertas or 0)
             series_temporales["datasets"]["confianza_promedio"].append(round(float(conf_prom or 0), 2))
 
@@ -794,7 +795,7 @@ async def obtener_estadisticas_completas(
                 "reconocimientos_exitosos": reconocimientos_exitosos,
                 "alertas_generadas": alertas_generadas,
                 "tasa_exito": round(tasa_exito, 2),
-                "confianza_promedio": round(float(avg_confianza), 2),
+                "confianza_promedio_exitosos": round(float(avg_confianza), 2),
                 "promedio_diario": round(total_reconocimientos / dias, 2) if dias > 0 else 0
             },
             "metricas_ml": ml_metrics,

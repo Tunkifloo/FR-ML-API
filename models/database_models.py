@@ -93,6 +93,7 @@ class HistorialReconocimiento(Base):
     imagen_consulta_path = Column(String(500), nullable=False)
     confianza = Column(Integer, default=0)  # Porcentaje de confianza 0-100
     distancia_euclidiana = Column(String(20))  # Distancia calculada
+    algoritmo_usado = Column(String(50))
 
     # Resultado del reconocimiento
     reconocido = Column(Boolean, default=False)
