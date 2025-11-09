@@ -37,7 +37,7 @@ class MLConfig:
     CONFLICT_PENALTY = 0.85  # Penalización cuando no coinciden
 
     # ============ DATA AUGMENTATION ============
-    USE_AUGMENTATION = False  # Activar augmentación
+    USE_AUGMENTATION = True  # Activar augmentación
     AUGMENTATION_ROTATIONS = [-5, 5]  # Rotaciones en grados
     AUGMENTATION_SCALES = [0.95, 1.05]  # Escalas
 

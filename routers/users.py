@@ -388,58 +388,105 @@ async def crear_usuario(
 
         # PASO 2: ENTRENAMIENTO AUTOMÁTICO REAL
         try:
+
             total_usuarios = db.query(Usuario).filter(Usuario.activo == True).count()
             usuarios_con_caracteristicas = db.query(CaracteristicasFaciales.usuario_id).distinct().count()
 
             print(f"[TRAINING] Usuarios: {total_usuarios}, con características: {usuarios_con_caracteristicas}")
+            print(f"[TRAINING] Modelo entrenado actualmente: {ml_service.is_trained}")
 
-            if usuarios_con_caracteristicas >= 2:
-                print(f"[TRAINING] 🚀 INICIANDO ENTRENAMIENTO AUTOMÁTICO...")
+            # LÓGICA DE REENTRENAMIENTO:
+            # 1. Entrenar por primera vez cuando haya al menos 2 usuarios
+            # 2. Después, re-entrenar cada 2 usuarios nuevos
+            should_train = False
+            training_reason = ""
 
-                try:
-                    # OBTENER TODAS LAS IMÁGENES PARA ENTRENAMIENTO
-                    usuarios_con_imagenes = db.query(Usuario).filter(Usuario.activo == True).all()
-                    images_by_person = {}
+            if not ml_service.is_trained and usuarios_con_caracteristicas >= 2:
+                # Primera vez: entrenar con mínimo 2 usuarios
+                should_train = True
+                training_reason = "entrenamiento inicial"
+                print(f"[TRAINING] 🎓 Condición cumplida: ENTRENAMIENTO INICIAL")
+            elif ml_service.is_trained:
+                # Modelo ya entrenado: verificar si debemos re-entrenar
+                # Obtener el número de usuarios del último entrenamiento
+                last_training_users = ml_service.last_training_users if hasattr(ml_service,
+                                                                                'last_training_users') else 0
+                users_since_last_training = usuarios_con_caracteristicas - last_training_users
 
-                    for usuario in usuarios_con_imagenes:
-                        imagenes_usuario = db.query(ImagenFacial).filter(
-                            ImagenFacial.usuario_id == usuario.id,
-                            ImagenFacial.activa == True
-                        ).all()
+                print(f"[TRAINING] Usuarios en último entrenamiento: {last_training_users}")
+                print(f"[TRAINING] Usuarios nuevos desde entonces: {users_since_last_training}")
 
-                        user_images = []
-                        for img_facial in imagenes_usuario:
-                            if os.path.exists(img_facial.ruta_archivo):
-                                img = cv2.imread(img_facial.ruta_archivo)
-                                if img is not None:
-                                    user_images.append(img)
+                if users_since_last_training >= 2:
+                    should_train = True
+                    training_reason = f"re-entrenamiento (cada 2 usuarios nuevos: {users_since_last_training})"
+                    print(f"[TRAINING] 🔄 Condición cumplida: RE-ENTRENAMIENTO CADA 2 USUARIOS")
+                else:
+                    print(f"[TRAINING] ⏳ Esperando más usuarios para re-entrenar ({users_since_last_training}/2)")
+                    ml_result.update({
+                        "training_triggered": False,
+                        "ml_message": f"Características guardadas. Esperando {2 - users_since_last_training} usuario(s) más para re-entrenar",
+                        "users_since_last_training": users_since_last_training,
+                        "users_needed_for_retrain": 2 - users_since_last_training
+                    })
+            else:
+                print(
+                    f"[TRAINING] ⏳ Esperando más usuarios para entrenamiento inicial ({usuarios_con_caracteristicas}/2)")
+                ml_result.update({
+                    "training_triggered": False,
+                    "ml_message": f"Características guardadas. Esperando {2 - usuarios_con_caracteristicas} usuario(s) más para entrenar",
+                    "users_with_features": usuarios_con_caracteristicas,
+                    "users_needed": 2 - usuarios_con_caracteristicas
+                })
 
-                        if user_images:
-                            images_by_person[usuario.id] = user_images
-                            print(f"[TRAINING] Usuario {usuario.id}: {len(user_images)} imágenes")
+            if should_train:
+                print(f"[TRAINING] 🚀 INICIANDO {training_reason.upper()}...")
 
-                    # VERIFICAR QUE TENEMOS DATOS SUFICIENTES
-                    if len(images_by_person) >= 2:
-                        print(f"[TRAINING] 🎓 Entrenando modelo con {len(images_by_person)} usuarios...")
+                # Obtener todos los usuarios con imágenes válidas
+                usuarios_con_imagenes = db.query(Usuario).filter(Usuario.activo == True).all()
+                images_by_person = {}
 
-                        # EJECUTAR ENTRENAMIENTO REAL
+                for usuario in usuarios_con_imagenes:
+                    imagenes_usuario = db.query(ImagenFacial).filter(
+                        ImagenFacial.usuario_id == usuario.id,
+                        ImagenFacial.activa == True
+                    ).all()
+
+                    user_images = []
+                    for img_facial in imagenes_usuario:
+                        if os.path.exists(img_facial.ruta_archivo):
+                            img = cv2.imread(img_facial.ruta_archivo)
+                            if img is not None:
+                                user_images.append(img)
+
+                    if user_images:
+                        images_by_person[usuario.id] = user_images
+                        print(f"[TRAINING] Usuario {usuario.id}: {len(user_images)} imágenes")
+
+                # EJECUTAR ENTRENAMIENTO SI HAY SUFICIENTES DATOS
+                if len(images_by_person) >= 2:
+                    print(f"[TRAINING] 🎓 Entrenando modelo con {len(images_by_person)} usuarios...")
+
+                    try:
                         training_stats = ml_service.train_models(images_by_person)
 
-                        print(f"[TRAINING] ✅ ENTRENAMIENTO COMPLETADO EXITOSAMENTE!")
+                        # GUARDAR EL NÚMERO DE USUARIOS EN ESTE ENTRENAMIENTO
+                        ml_service.last_training_users = len(images_by_person)
+
+                        print(f"[TRAINING] ✅ {training_reason.upper()} COMPLETADO!")
                         print(f"[TRAINING] Stats: {training_stats}")
 
-                        # ACTUALIZAR RESULTADO
                         ml_result.update({
                             "model_trained": True,
                             "training_triggered": True,
+                            "training_reason": training_reason,
                             "ml_training_status": "completed",
                             "training_stats": training_stats,
-                            "ml_message": f"🎓 Modelo entrenado automáticamente con {len(images_by_person)} usuarios",
+                            "ml_message": f"🎓 Modelo {'entrenado' if 'inicial' in training_reason else 're-entrenado'} con {len(images_by_person)} usuarios",
                             "users_in_training": len(images_by_person),
                             "total_training_images": sum(len(imgs) for imgs in images_by_person.values())
                         })
 
-                        # VERIFICAR QUE EL MODELO ESTÁ REALMENTE ENTRENADO
+                        # VERIFICAR QUE EL MODELO ESTÁ CARGADO
                         try:
                             ml_service.load_models()
                             if ml_service.is_trained:
@@ -452,33 +499,25 @@ async def crear_usuario(
                             print(f"[TRAINING] ⚠️ Error verificando modelo: {e}")
                             ml_result["model_verified"] = False
 
-                    else:
-                        print(f"[TRAINING] ❌ Insuficientes usuarios con imágenes válidas: {len(images_by_person)}")
+                    except Exception as e:
+                        print(f"[TRAINING] ❌ ERROR EN ENTRENAMIENTO: {e}")
                         ml_result.update({
-                            "training_triggered": False,
-                            "ml_message": f"Insuficientes usuarios con imágenes válidas: {len(images_by_person)}/2"
+                            "training_triggered": True,
+                            "ml_training_status": "failed",
+                            "training_error": str(e),
+                            "ml_message": f"Error en {training_reason}: {str(e)}"
                         })
-
-                except Exception as e:
-                    print(f"[TRAINING] ❌ ERROR EN ENTRENAMIENTO: {e}")
+                else:
+                    print(f"[TRAINING] ❌ Insuficientes usuarios con imágenes válidas: {len(images_by_person)}")
                     ml_result.update({
-                        "training_triggered": True,
-                        "ml_training_status": "failed",
-                        "training_error": str(e),
-                        "ml_message": f"Error en entrenamiento automático: {str(e)}"
+                        "training_triggered": False,
+                        "ml_message": f"Insuficientes usuarios con imágenes válidas: {len(images_by_person)}/2"
                     })
-            else:
-                print(f"[TRAINING] ⏳ Esperando más usuarios ({usuarios_con_caracteristicas}/2)")
-                ml_result.update({
-                    "training_triggered": False,
-                    "ml_message": f"Características guardadas. Esperando más usuarios ({usuarios_con_caracteristicas}/2)"
-                })
 
         except Exception as e:
-            print(f"[ERROR] Error verificando entrenamiento: {e}")
+            print(f"[TRAINING] ❌ ERROR EN VERIFICACIÓN DE ENTRENAMIENTO: {e}")
             ml_result.update({
-                "training_error": str(e),
-                "ml_message": f"Error verificando entrenamiento: {str(e)}"
+                "ml_message": f"Error en verificación de entrenamiento: {str(e)}"
             })
 
         # Preparar respuesta del usuario (SIEMPRE exitosa)

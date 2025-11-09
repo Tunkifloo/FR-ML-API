@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, case
 from sqlalchemy.engine import result
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
@@ -698,8 +698,8 @@ async def obtener_estadisticas_completas(
         reconocimientos_por_dia = db.query(
             func.date(HistorialReconocimiento.fecha_reconocimiento).label('fecha'),
             func.count(HistorialReconocimiento.id).label('total'),
-            func.sum(func.case((HistorialReconocimiento.reconocido == True, 1), else_=0)).label('exitosos'),
-            func.sum(func.case((HistorialReconocimiento.alerta_generada == True, 1), else_=0)).label('alertas'),
+            func.sum(case((HistorialReconocimiento.reconocido == True, 1), else_=0)).label('exitosos'),
+            func.sum(case((HistorialReconocimiento.alerta_generada == True, 1), else_=0)).label('alertas'),
             func.avg(HistorialReconocimiento.confianza).label('confianza_promedio')
         ).filter(
             HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio

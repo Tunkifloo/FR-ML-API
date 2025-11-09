@@ -29,7 +29,8 @@ class MLService:
 
         # Estado del modelo
         self.is_trained = False
-        self.model_version = "2.0_FIXED"
+        self.model_version = "2.0"
+        self.last_training_users = 0
         self.training_history = []
 
         # ⚡ CORREGIR: Añadir preprocesador SOLO si el archivo existe
@@ -72,7 +73,7 @@ class MLService:
 
     def preprocess_image_for_training(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        CORREGIDO: Preprocesa imagen de manera ROBUSTA para entrenamiento
+        Preprocesa imagen de manera ROBUSTA para entrenamiento
         """
         try:
             print(f"🔧 Preprocessing para entrenamiento: {image.shape}, dtype: {image.dtype}")
@@ -82,53 +83,31 @@ class MLService:
                 print(f"❌ Imagen inválida")
                 return None
 
-            # PASO 2: Detectar rostros (opcional, con fallback)
-            try:
-                faces = self.face_detector.detect_faces(image)
+            # PASO 2: Convertir a escala de grises si es necesario
+            if len(image.shape) == 3:
+                gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray_image = image.copy()
 
-                if faces:
-                    # Obtener el rostro más grande
-                    largest_face = self.face_detector.get_largest_face(faces)
-                    face_roi = self.face_detector.extract_face_roi(image, largest_face)
-                    print(f"✅ Rostro detectado y extraído: {face_roi.shape}")
+            # PASO 3: Redimensionar a tamaño estándar
+            target_size = (100, 100)
+            resized = cv2.resize(gray_image, target_size)
 
-                    # Procesar ROI del rostro
-                    if self.preprocessor:
-                        processed_face = self.preprocessor.preprocess_for_ml(face_roi, "both")
-                    else:
-                        processed_face = self._basic_preprocess(face_roi)
-                    return processed_face
-                else:
-                    print(f"⚠️ No se detectaron rostros, usando imagen completa")
-                    # FALLBACK: Usar imagen completa
-                    if self.preprocessor:
-                        processed_face = self.preprocessor.preprocess_for_ml(image, "both")
-                    else:
-                        processed_face = self._basic_preprocess(image)
-                    return processed_face
+            # PASO 4: Ecualizar histograma
+            equalized = cv2.equalizeHist(resized)
 
-            except Exception as e:
-                print(f"⚠️ Error en detección de rostros: {e}")
-                # FALLBACK: Usar imagen completa
-                if self.preprocessor:
-                    processed_face = self.preprocessor.preprocess_for_ml(image, "both")
-                else:
-                    processed_face = self._basic_preprocess(image)
-                return processed_face
+            # PASO 5: Normalizar a float64 [0,1]
+            normalized = equalized.astype(np.float64) / 255.0
+
+            print(
+                f"✅ Imagen preprocesada: {normalized.shape}, dtype: {normalized.dtype}, range: [{normalized.min():.3f}, {normalized.max():.3f}]")
+
+            return normalized
 
         except Exception as e:
             print(f"❌ Error crítico en preprocesamiento: {e}")
-            print(f"   Input shape: {image.shape if image is not None else 'None'}")
-
-            # ÚLTIMO FALLBACK: Preprocesamiento básico sin preprocessor
-            try:
-                if image is not None and image.size > 0:
-                    basic_processed = self._basic_preprocess(image)
-                    print(f"🔄 Fallback básico exitoso: {basic_processed.shape}")
-                    return basic_processed
-            except Exception as e2:
-                print(f"❌ Fallback también falló: {e2}")
-
+            import traceback
+            traceback.print_exc()
             return None
 
     def _basic_preprocess(self, image: np.ndarray) -> np.ndarray:
@@ -375,6 +354,38 @@ class MLService:
             }
         }
 
+        print()
+        print("=" * 60)
+        print("📊 CALCULANDO MÉTRICAS DE PRECISIÓN")
+        print("=" * 60)
+
+        # Calcular precisión usando validación cruzada simple
+        precision_metrics = self._calculate_training_precision(all_images_eigenfaces, all_images_lbp, all_labels)
+
+        # Estadísticas del entrenamiento
+        training_stats = {
+            "timestamp": datetime.now().isoformat(),
+            "total_images": len(all_labels),
+            "total_original_images": total_original_images,
+            "augmentation_factor": total_augmented_images / total_original_images if total_original_images > 0 else 1.0,
+            "augmentation_enabled": MLConfig.USE_AUGMENTATION,
+            "unique_persons": len(set(all_labels)),
+            "eigenfaces_info": self.eigenfaces_service.get_model_info(),
+            "lbp_info": self.lbp_service.get_model_info(),
+            "model_version": self.model_version,
+            "model_performance": precision_metrics,
+            "data_types_used": {
+                "eigenfaces": "float64 [0,1]",
+                "lbp": "uint8 [0,255]"
+            },
+            "config_used": {
+                "use_quality_check": MLConfig.USE_QUALITY_CHECK,
+                "use_face_alignment": MLConfig.USE_FACE_ALIGNMENT,
+                "use_advanced_illumination": MLConfig.USE_ADVANCED_ILLUMINATION,
+                "use_augmentation": MLConfig.USE_AUGMENTATION
+            }
+        }
+
         # USAR IMÁGENES ORIGINALES (sin augmentation) para características en BD
         print("💾 Guardando características en base de datos...")
         try:
@@ -405,8 +416,86 @@ class MLService:
             print(f"   • Factor de augmentation: {training_stats['augmentation_factor']:.1f}x")
         print("=" * 60)
         print()
+        self.last_training_users = len(images_by_person)
+        print(f"✅ Entrenamiento completado. Usuarios registrados: {self.last_training_users}")
 
         return training_stats
+
+    def _calculate_training_precision(self, images_eigenfaces: List[np.ndarray],
+                                      images_lbp: List[np.ndarray],
+                                      labels: List[int]) -> Dict[str, Any]:
+        """
+        Calcula métricas de precisión usando una muestra de validación
+        """
+        from sklearn.model_selection import train_test_split
+
+        print("📊 Calculando precisión del modelo...")
+
+        try:
+            # Dividir datos en train/test (80/20)
+            X_eigen_train, X_eigen_test, y_train, y_test = train_test_split(
+                images_eigenfaces, labels, test_size=0.2, random_state=42, stratify=labels
+            )
+            X_lbp_train, X_lbp_test, _, _ = train_test_split(
+                images_lbp, labels, test_size=0.2, random_state=42, stratify=labels
+            )
+
+            # Evaluar Eigenfaces
+            eigenfaces_correct = 0
+            for img, true_label in zip(X_eigen_test, y_test):
+                try:
+                    pred_id, confidence, _ = self.eigenfaces_service.recognize_face(img)
+                    if pred_id == true_label:
+                        eigenfaces_correct += 1
+                except:
+                    pass
+
+            eigenfaces_accuracy = eigenfaces_correct / len(y_test) if len(y_test) > 0 else 0
+
+            # Evaluar LBP
+            lbp_correct = 0
+            for img, true_label in zip(X_lbp_test, y_test):
+                try:
+                    pred_id, confidence, _ = self.lbp_service.recognize_face(img)
+                    if pred_id == true_label:
+                        lbp_correct += 1
+                except:
+                    pass
+
+            lbp_accuracy = lbp_correct / len(y_test) if len(y_test) > 0 else 0
+
+            # Evaluar Híbrido (promedio de ambos)
+            hybrid_accuracy = (eigenfaces_accuracy + lbp_accuracy) / 2.0
+
+            print(f"   ✅ Eigenfaces: {eigenfaces_accuracy:.2%}")
+            print(f"   ✅ LBP: {lbp_accuracy:.2%}")
+            print(f"   ✅ Híbrido: {hybrid_accuracy:.2%}")
+
+            return {
+                "eigenfaces": {
+                    "accuracy": eigenfaces_accuracy,
+                    "correct": eigenfaces_correct,
+                    "total": len(y_test)
+                },
+                "lbp": {
+                    "accuracy": lbp_accuracy,
+                    "correct": lbp_correct,
+                    "total": len(y_test)
+                },
+                "hybrid": {
+                    "accuracy": hybrid_accuracy,
+                    "correct": int((eigenfaces_correct + lbp_correct) / 2),
+                    "total": len(y_test)
+                }
+            }
+
+        except Exception as e:
+            print(f"   ⚠️ Error calculando precisión: {e}")
+            return {
+                "eigenfaces": {"accuracy": 0.0},
+                "lbp": {"accuracy": 0.0},
+                "hybrid": {"accuracy": 0.0}
+            }
 
     def _clean_for_json_storage(self, features: np.ndarray) -> list:
         """
@@ -444,7 +533,7 @@ class MLService:
 
     def _save_characteristics_to_db(self, images_by_person: Dict[int, List[np.ndarray]]):
         """
-        ✅ CORREGIDO: Guarda características con limpieza de valores infinitos
+        Guarda características con limpieza de valores infinitos
         """
         from config.database import SessionLocal
         from models.database_models import CaracteristicasFaciales, ImagenFacial
@@ -463,7 +552,7 @@ class MLService:
                 db_images = db.query(ImagenFacial).filter(
                     ImagenFacial.usuario_id == person_id,
                     ImagenFacial.activa == True
-                ).all()
+                ).order_by(ImagenFacial.id).all()
 
                 if not db_images:
                     print(f"   ⚠️ No se encontraron imágenes en BD para usuario {person_id}")
@@ -478,7 +567,7 @@ class MLService:
                     try:
                         print(f"   📷 Procesando imagen {db_image.id}: {original_image.shape}")
 
-                        # ✅ CRÍTICO: Procesar SEPARADAMENTE para cada algoritmo
+                        #  Procesar SEPARADAMENTE para cada algoritmo
 
                         # EIGENFACES: Necesita float64 [0,1]
                         eigenfaces_features = None
@@ -486,7 +575,8 @@ class MLService:
                             # Preprocesar específicamente para Eigenfaces
                             processed_for_eigen = self.preprocess_image_for_training(original_image.copy())
                             if processed_for_eigen is not None:
-                                raw_features = self.eigenfaces_service.extract_features(processed_for_eigen)
+                                # Aplanar la imagen preprocesada como vector
+                                raw_features = processed_for_eigen.flatten()
                                 # ✅ LIMPIAR PARA JSON
                                 eigenfaces_features = self._clean_for_json_storage(raw_features)
                                 print(f"   ✅ Eigenfaces: {len(eigenfaces_features)} características limpias")
@@ -501,9 +591,21 @@ class MLService:
                             if processed_for_lbp is not None:
                                 # Convertir a uint8 para LBP
                                 lbp_input = (processed_for_lbp * 255).astype(np.uint8)
-                                raw_lbp = self.lbp_service.extract_lbp_features(lbp_input)
-                                # ✅ LIMPIAR PARA JSON
-                                lbp_features = self._clean_for_json_storage(raw_lbp)
+
+                                # Extraer características LBP manualmente
+                                from skimage.feature import local_binary_pattern
+
+                                # Aplicar LBP
+                                radius = 2
+                                n_points = 16
+                                lbp_image = local_binary_pattern(lbp_input, n_points, radius, method='uniform')
+
+                                # Crear histograma
+                                n_bins = n_points + 2
+                                hist, _ = np.histogram(lbp_image.ravel(), bins=n_bins, range=(0, n_bins), density=True)
+
+                                # LIMPIAR PARA JSON
+                                lbp_features = self._clean_for_json_storage(hist)
                                 print(f"   ✅ LBP: {len(lbp_features)} características limpias")
                         except Exception as e:
                             print(f"   ❌ Error LBP: {e}")
@@ -522,7 +624,7 @@ class MLService:
                                 if lbp_features is not None:
                                     existing.lbp_histogram = lbp_features
                                 existing.fecha_procesamiento = datetime.now()
-                                existing.algoritmo_version = "2.0_INFINITY_FIXED"
+                                existing.algoritmo_version = self.model_version
                                 print(f"   🔄 Características actualizadas para imagen {db_image.id}")
                             else:
                                 # Crear nuevo registro
@@ -531,8 +633,8 @@ class MLService:
                                     imagen_id=db_image.id,
                                     eigenfaces_vector=eigenfaces_features,
                                     lbp_histogram=lbp_features,
-                                    algoritmo_version="2.0_INFINITY_FIXED",
-                                    calidad_deteccion=90
+                                    algoritmo_version=self.model_version,
+                                    calidad_deteccion=90.0
                                 )
                                 db.add(caracteristicas)
                                 print(f"   ✅ Características creadas para imagen {db_image.id}")
@@ -547,12 +649,16 @@ class MLService:
                         error_msg = f"Error procesando imagen {db_image.id}: {str(e)}"
                         print(f"   ❌ {error_msg}")
                         errors.append(error_msg)
+                        import traceback
+                        traceback.print_exc()
                         continue
 
             # Commit solo si hay características guardadas
             if characteristics_saved > 0:
                 db.commit()
-                print(f"✅ {characteristics_saved} características guardadas exitosamente en BD")
+                print(f"\n✅ {characteristics_saved} características guardadas exitosamente en BD")
+            else:
+                print(f"\n⚠️ No se guardaron características")
 
             if errors:
                 print(f"\n⚠️ ERRORES ENCONTRADOS ({len(errors)}):")
@@ -563,6 +669,8 @@ class MLService:
 
         except Exception as e:
             print(f"❌ ERROR CRÍTICO guardando características: {str(e)}")
+            import traceback
+            traceback.print_exc()
             db.rollback()
             raise
         finally:
@@ -979,55 +1087,81 @@ class MLService:
         """
         from config.database import SessionLocal
         from models.database_models import ModeloEntrenamiento
+        import json
 
         db = SessionLocal()
         try:
-            # Calcular precisión promedio basada en los stats
-            precision_promedio = "0.00"
+            # Calcular precisión promedio - usar 0.0 si no hay datos
+            precision_promedio = "0.0000"
 
+            # Intentar obtener métricas si existen
             if "model_performance" in training_stats:
-                hybrid_accuracy = training_stats["model_performance"].get("hybrid", {}).get("accuracy", 0)
-                eigenfaces_accuracy = training_stats["model_performance"].get("eigenfaces", {}).get("accuracy", 0)
-                lbp_accuracy = training_stats["model_performance"].get("lbp", {}).get("accuracy", 0)
+                try:
+                    hybrid_accuracy = training_stats["model_performance"].get("hybrid", {}).get("accuracy", 0.0)
+                    eigenfaces_accuracy = training_stats["model_performance"].get("eigenfaces", {}).get("accuracy", 0.0)
+                    lbp_accuracy = training_stats["model_performance"].get("lbp", {}).get("accuracy", 0.0)
 
-                # Calcular promedio de las tres precisiones
-                avg_precision = (hybrid_accuracy + eigenfaces_accuracy + lbp_accuracy) / 3
-                precision_promedio = f"{avg_precision:.4f}"
+                    # Calcular promedio
+                    avg_precision = (hybrid_accuracy + eigenfaces_accuracy + lbp_accuracy) / 3.0
+
+                    # IMPORTANTE: Formatear como STRING con 4 decimales
+                    precision_promedio = f"{avg_precision:.4f}"
+
+                    print(f"   📊 Precisiones calculadas:")
+                    print(f"      • Hybrid: {hybrid_accuracy:.4f}")
+                    print(f"      • Eigenfaces: {eigenfaces_accuracy:.4f}")
+                    print(f"      • LBP: {lbp_accuracy:.4f}")
+                    print(f"      • Promedio: {precision_promedio}")
+
+                except Exception as e:
+                    print(f"⚠️ No se pudieron calcular métricas de precisión: {e}")
+                    precision_promedio = "0.0000"
+            else:
+                print(f"⚠️ No hay 'model_performance' en training_stats")
+
+            # Preparar configuración como diccionario
+            config_dict = {
+                "eigenfaces_components": training_stats.get("eigenfaces_info", {}).get("n_components", 0),
+                "lbp_radius": training_stats.get("lbp_info", {}).get("radius", 2),
+                "lbp_points": training_stats.get("lbp_info", {}).get("n_points", 16),
+                "model_version": self.model_version,
+                "augmentation_enabled": training_stats.get("augmentation_enabled", False),
+                "total_original_images": training_stats.get("total_original_images", 0),
+                "augmentation_factor": training_stats.get("augmentation_factor", 1.0),
+                "model_performance": training_stats.get("model_performance", {})
+            }
 
             training_record = ModeloEntrenamiento(
                 version=f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                algoritmo="hybrid_fixed",
+                algoritmo="Hybrid (Eigenfaces + LBP)",
                 total_usuarios=training_stats.get("unique_persons", 0),
                 total_imagenes=training_stats.get("total_images", 0),
                 precision_promedio=precision_promedio,
                 ruta_modelo_eigenfaces="storage/models/eigenfaces_model.pkl",
                 ruta_modelo_lbp="storage/models/lbp_model.pkl",
-                configuracion={
-                    "eigenfaces_components": training_stats.get("eigenfaces_info", {}).get("n_components", 0),
-                    "lbp_radius": training_stats.get("lbp_info", {}).get("radius", 0),
-                    "lbp_points": training_stats.get("lbp_info", {}).get("n_points", 0),
-                    "training_stats": training_stats,
-                    "model_version": self.model_version,
-                    "data_types_fixed": training_stats.get("data_types_used", {}),
-                    "precision_detail": {
-                        "hybrid": training_stats.get("model_performance", {}).get("hybrid", {}).get("accuracy", 0),
-                        "eigenfaces": training_stats.get("model_performance", {}).get("eigenfaces", {}).get("accuracy",
-                                                                                                            0),
-                        "lbp": training_stats.get("model_performance", {}).get("lbp", {}).get("accuracy", 0)
-                    }
-                }
+                configuracion=config_dict
             )
 
+            # Desactivar registros anteriores
+            db.query(ModeloEntrenamiento).update({"activo": False}, synchronize_session=False)
+
+            # Guardar nuevo registro
             db.add(training_record)
             db.commit()
+            db.refresh(training_record)
 
-            print(f"✅ Registro de entrenamiento guardado: {training_record.version} - Precisión: {precision_promedio}")
+            print(f"\n✅ Registro de entrenamiento guardado:")
+            print(f"   • ID: {training_record.id}")
+            print(f"   • Version: {training_record.version}")
+            print(f"   • Precisión promedio: {precision_promedio}")
+            print(f"   • Total usuarios: {training_record.total_usuarios}")
+            print(f"   • Total imágenes: {training_record.total_imagenes}")
 
         except Exception as e:
             db.rollback()
             print(f"❌ Error guardando registro de entrenamiento: {e}")
             import traceback
-            print(traceback.format_exc())
+            traceback.print_exc()
         finally:
             db.close()
 
