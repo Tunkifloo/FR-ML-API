@@ -804,19 +804,31 @@ class MLService:
 
     def _save_training_record(self, training_stats: Dict[str, Any]):
         """
-        ✅ CORREGIDO: Guarda registro del entrenamiento en BD
+        Guarda registro del entrenamiento en BD con métricas calculadas
         """
         from config.database import SessionLocal
         from models.database_models import ModeloEntrenamiento
 
         db = SessionLocal()
         try:
+            # Calcular precisión promedio basada en los stats
+            precision_promedio = "0.00"
+
+            if "model_performance" in training_stats:
+                hybrid_accuracy = training_stats["model_performance"].get("hybrid", {}).get("accuracy", 0)
+                eigenfaces_accuracy = training_stats["model_performance"].get("eigenfaces", {}).get("accuracy", 0)
+                lbp_accuracy = training_stats["model_performance"].get("lbp", {}).get("accuracy", 0)
+
+                # Calcular promedio de las tres precisiones
+                avg_precision = (hybrid_accuracy + eigenfaces_accuracy + lbp_accuracy) / 3
+                precision_promedio = f"{avg_precision:.4f}"
+
             training_record = ModeloEntrenamiento(
                 version=f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 algoritmo="hybrid_fixed",
                 total_usuarios=training_stats.get("unique_persons", 0),
                 total_imagenes=training_stats.get("total_images", 0),
-                precision_promedio="N/A",
+                precision_promedio=precision_promedio,
                 ruta_modelo_eigenfaces="storage/models/eigenfaces_model.pkl",
                 ruta_modelo_lbp="storage/models/lbp_model.pkl",
                 configuracion={
@@ -825,18 +837,26 @@ class MLService:
                     "lbp_points": training_stats.get("lbp_info", {}).get("n_points", 0),
                     "training_stats": training_stats,
                     "model_version": self.model_version,
-                    "data_types_fixed": training_stats.get("data_types_used", {})
+                    "data_types_fixed": training_stats.get("data_types_used", {}),
+                    "precision_detail": {
+                        "hybrid": training_stats.get("model_performance", {}).get("hybrid", {}).get("accuracy", 0),
+                        "eigenfaces": training_stats.get("model_performance", {}).get("eigenfaces", {}).get("accuracy",
+                                                                                                            0),
+                        "lbp": training_stats.get("model_performance", {}).get("lbp", {}).get("accuracy", 0)
+                    }
                 }
             )
 
             db.add(training_record)
             db.commit()
 
-            print(f"✅ Registro de entrenamiento guardado: {training_record.version}")
+            print(f"✅ Registro de entrenamiento guardado: {training_record.version} - Precisión: {precision_promedio}")
 
         except Exception as e:
             db.rollback()
             print(f"❌ Error guardando registro de entrenamiento: {e}")
+            import traceback
+            print(traceback.format_exc())
         finally:
             db.close()
 

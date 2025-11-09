@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, and_
+from sqlalchemy.engine import result
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 import cv2
@@ -272,16 +273,26 @@ async def identificar_persona(
 
         # PASO 9: Registrar en historial
         try:
-            client_ip = request.client.host if request else "unknown"
+            client_ip = request.client.host if request and hasattr(request, 'client') else "127.0.0.1"
 
+            # Calcular distancia euclidiana si hay coincidencia
+            distancia_euclidiana = "N/A"
+            if response_data["reconocido"] and response_data["persona_id"]:
+                if "distance" in recognition_result:
+                    distancia_euclidiana = f"{recognition_result['distance']:.4f}"
+                else:
+                    # Calcular distancia basada en la confianza (inversamente proporcional)
+                    distancia_euclidiana = f"{(100 - response_data['confianza']) / 100:.4f}"
+
+            # Guardar en historial
             historial = HistorialReconocimiento(
-                usuario_id=response_data["persona_id"],
+                usuario_id=response_data["persona_id"] if response_data["reconocido"] else None,
                 imagen_consulta_path=temp_file_path,
                 confianza=int(response_data["confianza"]),
-                distancia_euclidiana=str(recognition_result.get("details", {}).get("distance", "N/A")),
+                distancia_euclidiana=distancia_euclidiana,
                 reconocido=response_data["reconocido"],
-                alerta_generada=alerta_seguridad is not None,
-                caracteristicas_consulta=convert_numpy_types(recognition_result.get("details", {})),
+                alerta_generada=alerta_seguridad is not None and alerta_seguridad.get("alerta_generada", False),
+                caracteristicas_consulta=recognition_result.get("details", None),
                 ip_origen=client_ip
             )
 
@@ -292,6 +303,8 @@ async def identificar_persona(
 
         except Exception as e:
             print(f"⚠️ Error guardando historial: {e}")
+            import traceback
+            print(traceback.format_exc())
             # No fallar el reconocimiento por error en historial
 
         # PASO 10: Añadir información adicional a la respuesta
