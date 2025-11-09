@@ -370,7 +370,7 @@ class LBPService:
             'threshold_similarity': self.threshold_similarity,
             'image_size': self.image_size,
             'is_trained': self.is_trained,
-            'model_version': '2.0_FIXED',
+            'model_version': '2.0',
             'data_type_requirement': 'uint8 [0,255] for CLAHE compatibility'
         }
 
@@ -434,7 +434,7 @@ class LBPService:
                 "Gaussian blur",
                 "CLAHE adaptive histogram equalization"
             ],
-            "model_version": "2.0_FIXED"
+            "model_version": "2.0"
         }
 
     def calculate_lbp_histogram_comparison(self, hist1: np.ndarray, hist2: np.ndarray) -> dict:

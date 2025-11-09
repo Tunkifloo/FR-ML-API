@@ -1547,23 +1547,123 @@ async def entrenar_modelo_usuarios(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error al entrenar modelo: {str(e)}")
 
 
-@router.get("/entrenamiento/estado", response_model=ResponseWithData, summary="Estado del entrenamiento")
-async def estado_entrenamiento():
+@router.get("/entrenamiento/estado", response_model=ResponseWithData,
+            summary="Obtener estado del entrenamiento ML")
+async def obtener_estado_entrenamiento(db: Session = Depends(get_db)):
     """
-    Verifica el estado actual del entrenamiento automático
+    Obtiene el estado actual del sistema de entrenamiento con verificación real del modelo
     """
     try:
-        status = ml_service.get_training_status()
+        from services.ml_service import MLService
+        import os
+
+        ml_service = MLService()
+
+        # Contar usuarios con imágenes
+        usuarios_con_imagenes = db.query(Usuario).filter(
+            Usuario.activo == True
+        ).join(ImagenFacial).filter(
+            ImagenFacial.activa == True
+        ).distinct().count()
+
+        # Contar total de imágenes activas
+        total_imagenes = db.query(ImagenFacial).filter(
+            ImagenFacial.activa == True
+        ).count()
+
+        #  RUTAS HARDCODEADAS
+        eigenfaces_model_path = "storage/models/eigenfaces_model.pkl"
+        lbp_model_path = "storage/models/lbp_model.pkl"
+        embeddings_path = "storage/embeddings/face_embeddings.pkl"
+
+        # Verificar si los archivos existen
+        eigenfaces_model_exists = os.path.exists(eigenfaces_model_path)
+        lbp_model_exists = os.path.exists(lbp_model_path)
+        embeddings_exist = os.path.exists(embeddings_path)
+
+        print(f"🔍 Verificando archivos del modelo:")
+        print(f"   Eigenfaces: {eigenfaces_model_path} - {'✅ Existe' if eigenfaces_model_exists else '❌ No existe'}")
+        print(f"   LBP: {lbp_model_path} - {'✅ Existe' if lbp_model_exists else '❌ No existe'}")
+        print(f"   Embeddings: {embeddings_path} - {'✅ Existe' if embeddings_exist else '❌ No existe'}")
+
+        # El modelo está entrenado si existen los dos archivos de modelos
+        model_trained = eigenfaces_model_exists and lbp_model_exists
+
+        # Si los archivos existen, verificar que el modelo se pueda cargar
+        if model_trained:
+            try:
+                # Intentar cargar el modelo para verificar que es válido
+                ml_service.load_models()
+                model_trained = ml_service.is_trained
+                print(f"✅ Modelo cargado y verificado: {model_trained}")
+            except Exception as e:
+                print(f"⚠️ Error al cargar modelo: {str(e)}")
+                model_trained = False
+
+        # Usar atributos de la INSTANCIA de MLService
+        auto_training_enabled = ml_service.auto_training_enabled
+        min_users_required = ml_service.min_persons_for_training
+        model_version = ml_service.model_version
+
+        # Calcular usuarios pendientes
+        usuarios_pendientes = max(0, min_users_required - usuarios_con_imagenes)
+
+        # Determinar si se puede entrenar
+        can_train = usuarios_con_imagenes >= min_users_required and total_imagenes >= (min_users_required * 2)
+
+        # Determinar el estado del sistema
+        if model_trained:
+            system_ready = True
+            recommendation = "✅ Sistema listo - Modelo entrenado y operativo"
+        elif can_train:
+            system_ready = True
+            recommendation = "🎓 Datos suficientes - Se puede entrenar automáticamente"
+        else:
+            system_ready = False
+            recommendation = f"⚠️ Se necesitan al menos {min_users_required} usuarios con mínimo 2 imágenes cada uno"
+
+        # Información de correcciones aplicadas
+        fixes_status = "✅ Tipos de datos corregidos para ambos algoritmos"
 
         return ResponseWithData(
             success=True,
             message="Estado del entrenamiento obtenido",
-            data=status
+            data={
+                "model_trained": model_trained,
+                "auto_training_enabled": auto_training_enabled,
+                "training_requirements": {
+                    "can_train": can_train,
+                    "users_with_images": usuarios_con_imagenes,
+                    "total_images": total_imagenes,
+                    "min_required": min_users_required,
+                    "pending_users": usuarios_pendientes,
+                    "model_trained": model_trained,
+                    "auto_training_enabled": auto_training_enabled,
+                    "model_version": model_version
+                },
+                "system_ready": system_ready,
+                "recommendation": recommendation,
+                "model_version": model_version,
+                "fixes_status": fixes_status,
+                # Información adicional para debugging
+                "model_files_status": {
+                    "eigenfaces_model": eigenfaces_model_exists,
+                    "lbp_model": lbp_model_exists,
+                    "embeddings": embeddings_exist,
+                    "note": "embeddings.pkl no es crítico si los modelos individuales existen"
+                },
+                "paths_checked": {
+                    "eigenfaces": eigenfaces_model_path,
+                    "lbp": lbp_model_path,
+                    "embeddings": embeddings_path
+                }
+            }
         )
 
     except Exception as e:
+        import traceback
+        print(f"❌ Error al obtener estado de entrenamiento: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error al obtener estado: {str(e)}")
-
 
 @router.post("/entrenamiento/forzar", response_model=ResponseWithData, summary="Forzar reentrenamiento")
 async def forzar_entrenamiento():

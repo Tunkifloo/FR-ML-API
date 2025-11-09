@@ -347,7 +347,7 @@ class EigenfacesService:
             'image_size': self.image_size,
             'threshold_distance': self.threshold_distance,
             'is_trained': self.is_trained,
-            'model_version': '2.0_INFINITY_FIXED'
+            'model_version': '2.0'
         }
 
         with open(path, 'wb') as f:
@@ -407,7 +407,7 @@ class EigenfacesService:
             "unique_persons": len(set(self.trained_labels)) if self.is_trained else 0,
             "threshold_distance": self.threshold_distance,
             "variance_explained": sum(self.pca.explained_variance_ratio_) if self.is_trained else 0,
-            "model_version": "2.0_INFINITY_FIXED"
+            "model_version": "2.0"
         }
 
         # ✅ AÑADIR DIAGNÓSTICOS DE ESTABILIDAD

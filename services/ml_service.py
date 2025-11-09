@@ -1324,6 +1324,36 @@ class MLService:
 
         return status
 
+    def is_model_trained(self) -> bool:
+        """
+        Verifica si el modelo está entrenado y listo para usar
+
+        Returns:
+            bool: True si el modelo está entrenado, False en caso contrario
+        """
+        try:
+            # Verificar que los modelos estén cargados en memoria
+            if self.eigenfaces_model is None or self.lbp_model is None:
+                return False
+
+            # Verificar que haya embeddings
+            if not self.face_embeddings or len(self.face_embeddings) == 0:
+                return False
+
+            # Verificar que los modelos tengan los atributos necesarios
+            if not hasattr(self.eigenfaces_model, 'components_'):
+                return False
+
+            if not hasattr(self.lbp_model, 'histograms') or len(self.lbp_model.histograms) == 0:
+                return False
+
+            # Todo está OK
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Error verificando estado del modelo: {str(e)}")
+            return False
+
     def _get_training_recommendation(self, requirements: Dict[str, Any]) -> str:
         """
         ✅ CORREGIDO: Obtiene recomendación sobre el entrenamiento
