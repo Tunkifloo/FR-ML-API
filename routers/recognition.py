@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import json
 
 from config.database import get_db
+from config.ml_config import MLConfig
 from models.database_models import Usuario, HistorialReconocimiento
 from models.pydantic_models import (
     ReconocimientoResponse, ResponseWithData, AlgoritmoReconocimiento
@@ -165,17 +166,44 @@ async def identificar_persona(
         if img is None:
             raise HTTPException(
                 status_code=400,
-                detail="No se pudo leer la imagen. El archivo puede estar corrupto o en un formato no soportado."
+                detail="No se pudo leer la imagen. El archivo puede estar corrupto."
             )
 
         # Validar dimensiones mínimas
         if img.shape[0] < 50 or img.shape[1] < 50:
             raise HTTPException(
                 status_code=400,
-                detail=f"La imagen es demasiado pequeña ({img.shape[1]}x{img.shape[0]}). Mínimo requerido: 50x50 píxeles."
+                detail=f"Imagen muy pequeña ({img.shape[1]}x{img.shape[0]}). Mínimo: 50x50 píxeles."
             )
 
-        print(f"✅ Imagen cargada correctamente: {img.shape}, tamaño: {imagen.size} bytes")
+        # NUEVO: Verificar calidad de imagen
+        quality_info = {}
+        if MLConfig.USE_QUALITY_CHECK:
+            quality_metrics = ml_service.quality_checker.check_image_quality(img)
+            quality_info = {
+                "quality_level": quality_metrics['quality_level'],
+                "quality_score": quality_metrics['overall_score'],
+                "is_acceptable": quality_metrics['is_acceptable']
+            }
+
+            print(
+                f"📊 Calidad de consulta: {quality_metrics['quality_level']} ({quality_metrics['overall_score']:.1f}/100)")
+
+            # Advertir pero NO rechazar (en reconocimiento somos más permisivos)
+            if quality_metrics['overall_score'] < 30:
+                print(f"⚠️ ADVERTENCIA: Imagen de muy baja calidad")
+
+        # NUEVO: Intentar alinear rostro para mejorar reconocimiento
+        if ml_service.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
+            aligned = ml_service.face_aligner.align_face(img)
+            if aligned is not None:
+                img = aligned  # Usar imagen alineada
+                quality_info["face_aligned"] = True
+                print(f"✅ Rostro alineado para reconocimiento")
+            else:
+                quality_info["face_aligned"] = False
+
+        print(f"✅ Imagen procesada: {img.shape}, tamaño: {imagen.size} bytes")
 
         # PASO 5: Realizar reconocimiento con manejo de errores
         start_time = datetime.now()
@@ -208,7 +236,8 @@ async def identificar_persona(
             "imagen_info": {
                 "dimensiones": f"{img.shape[1]}x{img.shape[0]}",
                 "canales": img.shape[2] if len(img.shape) == 3 else 1,
-                "tamano_bytes": imagen.size
+                "tamano_bytes": imagen.size,
+                "quality_info": quality_info
             }
         }
 
@@ -665,11 +694,12 @@ async def obtener_estadisticas_completas(
             rangos_confianza[rango]["count"] = count
 
         # 4. RECONOCIMIENTOS POR DÍA (para gráfico de líneas)
+        # Reconocimientos por día
         reconocimientos_por_dia = db.query(
             func.date(HistorialReconocimiento.fecha_reconocimiento).label('fecha'),
             func.count(HistorialReconocimiento.id).label('total'),
-            func.sum(func.case([(HistorialReconocimiento.reconocido == True, 1)], else_=0)).label('exitosos'),
-            func.sum(func.case([(HistorialReconocimiento.alerta_generada == True, 1)], else_=0)).label('alertas'),
+            func.sum(func.case((HistorialReconocimiento.reconocido == True, 1), else_=0)).label('exitosos'),
+            func.sum(func.case((HistorialReconocimiento.alerta_generada == True, 1), else_=0)).label('alertas'),
             func.avg(HistorialReconocimiento.confianza).label('confianza_promedio')
         ).filter(
             HistorialReconocimiento.fecha_reconocimiento >= fecha_inicio

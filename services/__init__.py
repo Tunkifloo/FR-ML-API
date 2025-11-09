@@ -1,18 +1,28 @@
-# services/__init__.py
 """
-Servicios de Machine Learning para reconocimiento facial
+Services package - Servicios del sistema de reconocimiento facial
 """
 
-from .ml_service import MLService
+# Importar servicios base primero (sin dependencias circulares)
+from .image_preprocessor import ImagePreprocessor
+from .face_detection_service import FaceDetectionService
+
+# Luego servicios de algoritmos
 from .eigenfaces_service import EigenfacesService
 from .lbp_service import LBPService
-from .face_detection_service import FaceDetectionService
-from .image_preprocessor import ImagePreprocessor  # ⚡ AÑADIR
+
+# Servicios de mejoras (nuevos)
+from .quality_checker import ImageQualityChecker
+from .face_alignment import FaceAlignmentService
+
+# Finalmente el servicio principal que depende de los anteriores
+from .ml_service import MLService
 
 __all__ = [
-    "MLService",
-    "EigenfacesService",
-    "LBPService",
-    "FaceDetectionService",
-    "ImagePreprocessor"  # ⚡ AÑADIR
+    'ImagePreprocessor',
+    'FaceDetectionService',
+    'EigenfacesService',
+    'LBPService',
+    'ImageQualityChecker',
+    'FaceAlignmentService',
+    'MLService'
 ]

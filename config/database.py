@@ -125,65 +125,52 @@ def drop_all_tables():
 
 def create_database_if_not_exists():
     """
-    Crea la base de datos si no existe (solo para desarrollo local)
+    Crea la base de datos si no existe
     """
-    if RAILWAY_ENVIRONMENT or ENVIRONMENT == 'production':
-        print("🚂 Railway: Base de datos ya existe, saltando creación")
-        return
-
-    import pymysql
-
-    # Configuración de conexión (sin especificar base de datos)
-    db_config = {
-        'host': DB_HOST,
-        'user': DB_USER,
-        'password': DB_PASSWORD,
-        'charset': 'utf8mb4',
-        'port': int(DB_PORT)
-    }
+    print("🔄 Verificando existencia de base de datos...")
 
     try:
-        print(f"🔌 Conectando a MySQL en {DB_HOST}:{DB_PORT} como {DB_USER}...")
+        # Crear conexión SIN especificar la base de datos
+        temp_url = f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/"
+        temp_engine = create_engine(temp_url, echo=False)
 
-        connection = pymysql.connect(**db_config)
-        cursor = connection.cursor()
+        # Intentar crear la base de datos
+        with temp_engine.connect() as conn:
+            # Verificar si existe
+            result = conn.execute(text(f"SHOW DATABASES LIKE '{DB_NAME}'"))
+            exists = result.fetchone() is not None
 
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        print(f"✅ Base de datos '{DB_NAME}' creada o ya existe")
+            if exists:
+                print(f"✅ Base de datos '{DB_NAME}' ya existe")
+            else:
+                print(f"📝 Creando base de datos '{DB_NAME}'...")
+                conn.execute(text(f"CREATE DATABASE {DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+                conn.commit()
+                print(f"✅ Base de datos '{DB_NAME}' creada exitosamente")
 
-        cursor.close()
-        connection.close()
+        temp_engine.dispose()
+        return True
 
     except Exception as e:
-        print(f"❌ Error al crear la base de datos: {e}")
-        print(f"💡 En Railway, la base de datos ya debe existir")
-        if not RAILWAY_ENVIRONMENT:
-            raise
+        print(f"❌ Error creando base de datos: {e}")
+        print(f"💡 Crear manualmente con: CREATE DATABASE {DB_NAME};")
+        return False
 
 
-def test_connection():
+def test_connection() -> bool:
     """
     Prueba la conexión a la base de datos
     """
+    print("🔄 Probando conexión a la base de datos...")
     try:
-        print("🔄 Probando conexión a la base de datos...")
-
-        with engine.connect() as connection:
-            result = connection.execute(text("SELECT 1 as test, DATABASE() as db_name, USER() as user"))
-            row = result.fetchone()
-
-            print(f"✅ Conexión exitosa!")
-            print(f"   Test: {row[0]}")
-            print(f"   Base de datos: {row[1]}")
-            print(f"   Usuario: {row[2]}")
-
-            return True
-
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            if result.fetchone():
+                print("✅ Conexión exitosa a la base de datos")
+                return True
+        return False
     except Exception as e:
         print(f"❌ Error de conexión: {e}")
-        if RAILWAY_ENVIRONMENT:
-            print("💡 Verificar que MySQL esté activo en Railway")
-            print("💡 Verificar que las variables MYSQL* estén disponibles")
         return False
 
 

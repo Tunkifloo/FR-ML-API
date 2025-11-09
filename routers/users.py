@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from config.database import get_db
+from config.ml_config import MLConfig
 from models.database_models import Usuario, ImagenFacial, CaracteristicasFaciales, asignar_requisitoriado_aleatorio
 from models.pydantic_models import (
     UsuarioCreate, UsuarioUpdate, Usuario as UsuarioResponse, UsuarioDetallado,
@@ -42,12 +43,38 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def validate_image_file(file: UploadFile) -> bool:
-    """Valida si el archivo es una imagen válida"""
+    """
+    Valida si el archivo es una imagen válida
+    Verifica extensión Y content-type
+    """
     if not file.filename:
+        print(f"❌ Validación falló: filename vacío")
         return False
 
+    # Validar extensión
     file_ext = os.path.splitext(file.filename)[1].lower()
-    return file_ext in ALLOWED_EXTENSIONS
+    if file_ext not in ALLOWED_EXTENSIONS:
+        print(f"❌ Validación falló: extensión '{file_ext}' no permitida")
+        return False
+
+    # Validar content-type (más permisivo)
+    if file.content_type:
+        # Lista de content-types válidos
+        valid_content_types = [
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/bmp',
+            'image/x-ms-bmp',
+            'application/octet-stream',
+        ]
+
+        if file.content_type not in valid_content_types:
+            print(f"⚠️ Content-type no estándar: {file.content_type}, pero extensión válida - ACEPTANDO")
+            # No rechazar, solo advertir
+
+    print(f"✅ Archivo validado: {file.filename} ({file_ext})")
+    return True
 
 
 def convert_image_to_base64(image_path: str, max_size: Tuple[int, int] = (150, 150)) -> Optional[str]:
@@ -113,8 +140,10 @@ async def crear_usuario(
         if len(imagenes) < 1 or len(imagenes) > 15:
             raise HTTPException(
                 status_code=400,
-                detail="Debe proporcionar entre 1 y 15 imágenes"
+                detail=f"Debe proporcionar entre 1 y 15 imágenes. Recibidas: {len(imagenes)}"
             )
+
+        print(f"📊 Procesando {len(imagenes)} imágenes para el nuevo usuario")
 
         # Validar archivos de imagen
         for img in imagenes:
@@ -164,36 +193,88 @@ async def crear_usuario(
         db.commit()
         db.refresh(nuevo_usuario)
 
-        # Procesar y guardar imágenes
+        # Procesar y guardar imágenes CON VERIFICACIÓN DE CALIDAD
         imagenes_guardadas = []
+        imagenes_rechazadas = []
 
-        for i, imagen in enumerate(imagenes):
-            # Generar nombre único para el archivo
+        for imagen in imagenes:
+            # Generar nombre único
             file_extension = os.path.splitext(imagen.filename)[1]
             unique_filename = f"user_{nuevo_usuario.id}_{uuid.uuid4().hex}{file_extension}"
             file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-            # Guardar archivo
+            # Guardar archivo temporal
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(imagen.file, buffer)
 
-            # Obtener información del archivo
-            file_stat = os.stat(file_path)
+            # NUEVO: Verificar calidad de imagen
+            img_cv = cv2.imread(file_path)
+            if img_cv is None:
+                print(f"⚠️ No se pudo leer la imagen: {imagen.filename}")
+                os.remove(file_path)
+                imagenes_rechazadas.append({
+                    "nombre": imagen.filename,
+                    "razon": "Archivo corrupto o formato inválido"
+                })
+                continue
 
-            # Crear registro de imagen
+            # Verificar calidad si está habilitado
+            if MLConfig.USE_QUALITY_CHECK:
+                quality_metrics = ml_service.quality_checker.check_image_quality(img_cv)
+                print(
+                    f"📊 Calidad de '{imagen.filename}': {quality_metrics['quality_level']} ({quality_metrics['overall_score']:.1f}/100)")
+
+                # Rechazar si calidad es muy baja
+                if not quality_metrics['is_acceptable']:
+                    print(f"❌ Imagen rechazada por baja calidad")
+                    os.remove(file_path)
+                    imagenes_rechazadas.append({
+                        "nombre": imagen.filename,
+                        "razon": f"Calidad insuficiente ({quality_metrics['quality_level']})",
+                        "score": quality_metrics['overall_score']
+                    })
+                    continue
+
+            # Intentar alinear rostro
+            aligned_path = None
+            if ml_service.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
+                aligned = ml_service.face_aligner.align_face(img_cv)
+                if aligned is not None and MLConfig.SAVE_ALIGNED_IMAGES:
+                    aligned_path = file_path.replace(file_extension, f'_aligned{file_extension}')
+                    cv2.imwrite(aligned_path, aligned)
+                    print(f"✅ Rostro alineado guardado")
+
+            # Obtener dimensiones
+            height, width = img_cv.shape[:2]
+
+            # Crear registro en BD
             imagen_facial = ImagenFacial(
                 usuario_id=nuevo_usuario.id,
                 nombre_archivo=imagen.filename,
                 ruta_archivo=file_path,
-                es_principal=(i == 0),  # Primera imagen como principal
-                formato=file_extension[1:],  # Sin el punto
-                tamano_bytes=file_stat.st_size
+                es_principal=(len(imagenes_guardadas) == 0),
+                formato=file_extension[1:],
+                tamano_bytes=os.path.getsize(file_path),
+                ancho=width,
+                alto=height,
+                quality_score=quality_metrics.get('overall_score') if MLConfig.USE_QUALITY_CHECK else None,
+                quality_level=quality_metrics.get('quality_level') if MLConfig.USE_QUALITY_CHECK else None,
+                face_aligned=aligned is not None
             )
 
             db.add(imagen_facial)
             imagenes_guardadas.append(imagen_facial)
 
+        # Verificar que al menos una imagen fue aceptada
+        if len(imagenes_guardadas) == 0:
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Todas las imágenes fueron rechazadas. Imágenes rechazadas: {imagenes_rechazadas}"
+            )
+
         db.commit()
+        print(f"✅ {len(imagenes_guardadas)} imágenes guardadas, {len(imagenes_rechazadas)} rechazadas")
 
         # INICIALIZAR RESULTADO ML
         ml_result = {
@@ -902,11 +983,17 @@ async def añadir_imagenes_usuario(
         ).count()
 
         # Verificar límite de imágenes
-        if imagenes_existentes + len(imagenes) > 15:
+        total_imagenes = imagenes_existentes + len(imagenes)
+        if total_imagenes > 15:
             raise HTTPException(
                 status_code=400,
-                detail=f"El usuario ya tiene {imagenes_existentes} imágenes. Máximo permitido: 15"
+                detail=f"El usuario ya tiene {imagenes_existentes} imágenes. "
+                       f"Intentas añadir {len(imagenes)} más (total: {total_imagenes}). "
+                       f"Máximo permitido: 15"
             )
+
+        print(
+            f"📊 Usuario tiene {imagenes_existentes} imágenes, añadiendo {len(imagenes)} más (total: {total_imagenes})")
 
         # Validar archivos
         for img in imagenes:
@@ -924,29 +1011,72 @@ async def añadir_imagenes_usuario(
 
         # Procesar y guardar imágenes
         imagenes_guardadas = []
+        imagenes_rechazadas = []
 
         for imagen in imagenes:
-            # Generar nombre único
             file_extension = os.path.splitext(imagen.filename)[1]
             unique_filename = f"user_{usuario_id}_{uuid.uuid4().hex}{file_extension}"
             file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-            # Guardar archivo
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(imagen.file, buffer)
 
-            # Crear registro
+            # VERIFICACIÓN DE CALIDAD
+            img_cv = cv2.imread(file_path)
+            if img_cv is None:
+                print(f"⚠️ No se pudo leer la imagen: {imagen.filename}")
+                os.remove(file_path)
+                imagenes_rechazadas.append({
+                    "nombre": imagen.filename,
+                    "razon": "Archivo corrupto o formato inválido"
+                })
+                continue
+
+            if MLConfig.USE_QUALITY_CHECK:
+                quality_metrics = ml_service.quality_checker.check_image_quality(img_cv)
+                print(f"📊 Calidad: {quality_metrics['quality_level']} ({quality_metrics['overall_score']:.1f}/100)")
+
+                if not quality_metrics['is_acceptable']:
+                    print(f"❌ Imagen rechazada por baja calidad")
+                    os.remove(file_path)
+                    imagenes_rechazadas.append({
+                        "nombre": imagen.filename,
+                        "razon": f"Calidad insuficiente ({quality_metrics['quality_level']})",
+                        "score": quality_metrics['overall_score']
+                    })
+                    continue
+
+            # ALINEACIÓN FACIAL
+            if ml_service.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
+                aligned = ml_service.face_aligner.align_face(img_cv)
+                if aligned is not None and MLConfig.SAVE_ALIGNED_IMAGES:
+                    aligned_path = file_path.replace(file_extension, f'_aligned{file_extension}')
+                    cv2.imwrite(aligned_path, aligned)
+                    print(f"✅ Rostro alineado guardado")
+
+            height, width = img_cv.shape[:2]
+
             imagen_facial = ImagenFacial(
-                usuario_id=usuario_id,
                 nombre_archivo=imagen.filename,
                 ruta_archivo=file_path,
-                es_principal=False,  # Las nuevas imágenes no son principales
+                es_principal=(len(imagenes_guardadas) == 0),
                 formato=file_extension[1:],
-                tamano_bytes=os.path.getsize(file_path)
+                tamano_bytes=os.path.getsize(file_path),
+                ancho=width,
+                alto=height,
+                quality_score=quality_metrics.get('overall_score') if MLConfig.USE_QUALITY_CHECK else None,
+                quality_level=quality_metrics.get('quality_level') if MLConfig.USE_QUALITY_CHECK else None,
+                face_aligned=aligned is not None
             )
 
             db.add(imagen_facial)
             imagenes_guardadas.append(imagen_facial)
+
+        if len(imagenes_guardadas) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Todas las imágenes fueron rechazadas: {imagenes_rechazadas}"
+            )
 
         db.commit()
 

@@ -1,17 +1,16 @@
-import numpy as np
-import cv2
-import json
 import os
-from typing import List, Dict, Tuple, Optional, Any
 from datetime import datetime
-from sklearn.ensemble import VotingClassifier
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
+from typing import List, Dict, Tuple, Optional, Any
+
+import cv2
+import numpy as np
 
 from .eigenfaces_service import EigenfacesService
-from .lbp_service import LBPService
 from .face_detection_service import FaceDetectionService
-
+from .lbp_service import LBPService
+from config.ml_config import MLConfig
+from services.quality_checker import ImageQualityChecker
+from services.face_alignment import FaceAlignmentService
 
 class MLService:
     """
@@ -59,6 +58,17 @@ class MLService:
         # Almacenamiento
         self.storage_path = "storage/embeddings/"
         os.makedirs(self.storage_path, exist_ok=True)
+
+        # Servicios adicionales para mejoras
+        self.quality_checker = ImageQualityChecker()
+        try:
+            self.face_aligner = FaceAlignmentService()
+            self.alignment_available = True
+            print("✅ Alineación facial disponible")
+        except Exception as e:
+            self.face_aligner = None
+            self.alignment_available = False
+            print(f"⚠️ Alineación facial no disponible: {e}")
 
     def preprocess_image_for_training(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -155,11 +165,94 @@ class MLService:
             print(f"❌ Error en preprocesamiento básico: {e}")
             raise
 
+    def _apply_data_augmentation(self, images: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Aplica data augmentation a un conjunto de imágenes
+        Retorna imágenes en el MISMO formato que recibe (float64 o uint8)
+        """
+        if not MLConfig.USE_AUGMENTATION:
+            return images
+
+        augmented_images = []
+
+        for img in images:
+            # Siempre añadir la imagen original
+            augmented_images.append(img)
+
+            # Detectar el tipo de dato de entrada
+            is_float = img.dtype == np.float64 or img.dtype == np.float32
+
+            # Convertir temporalmente a uint8 para transformaciones
+            if is_float:
+                img_work = (img * 255).astype(np.uint8)
+            else:
+                img_work = img.copy()
+
+            h, w = img_work.shape[:2]
+
+            # 1. ROTACIONES
+            for angle in MLConfig.AUGMENTATION_ROTATIONS:
+                M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+                rotated = cv2.warpAffine(img_work, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+                # Convertir de vuelta al formato original
+                if is_float:
+                    rotated = rotated.astype(np.float64) / 255.0
+
+                augmented_images.append(rotated)
+
+            # 2. ESCALAS
+            for scale in MLConfig.AUGMENTATION_SCALES:
+                new_h, new_w = int(h * scale), int(w * scale)
+                scaled = cv2.resize(img_work, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+                # Crop o pad para mantener el tamaño original
+                if scale > 1.0:
+                    # Crop del centro
+                    start_h = (new_h - h) // 2
+                    start_w = (new_w - w) // 2
+                    scaled = scaled[start_h:start_h + h, start_w:start_w + w]
+                else:
+                    # Pad con replicación de bordes
+                    pad_h = (h - new_h) // 2
+                    pad_w = (w - new_w) // 2
+                    pad_h_extra = h - new_h - pad_h
+                    pad_w_extra = w - new_w - pad_w
+                    scaled = cv2.copyMakeBorder(
+                        scaled, pad_h, pad_h_extra, pad_w, pad_w_extra,
+                        cv2.BORDER_REPLICATE
+                    )
+
+                # Convertir de vuelta al formato original
+                if is_float:
+                    scaled = scaled.astype(np.float64) / 255.0
+
+                augmented_images.append(scaled)
+
+        original_count = len(images)
+        augmented_count = len(augmented_images)
+        factor = augmented_count / original_count if original_count > 0 else 0
+
+        print(f"📊 Data Augmentation: {original_count} → {augmented_count} imágenes (factor: {factor:.1f}x)")
+
+        return augmented_images
+
     def train_models(self, images_by_person: Dict[int, List[np.ndarray]]) -> Dict[str, Any]:
         """
-        ✅ CORREGIDO: Entrena modelos con manejo adecuado de tipos de datos
+        Entrena modelos con manejo adecuado de tipos de datos y data augmentation opcional
         """
-        print("🚀 Iniciando entrenamiento del modelo híbrido...")
+        print("=" * 60)
+        print("🚀 INICIANDO ENTRENAMIENTO DEL MODELO HÍBRIDO")
+        print("=" * 60)
+
+        if MLConfig.USE_AUGMENTATION:
+            print(f"📊 Data Augmentation: ACTIVADO")
+            print(f"   • Rotaciones: {MLConfig.AUGMENTATION_ROTATIONS}")
+            print(f"   • Escalas: {MLConfig.AUGMENTATION_SCALES}")
+        else:
+            print(f"📊 Data Augmentation: DESACTIVADO")
+
+        print()
 
         # Preparar datos de entrenamiento
         all_images_eigenfaces = []  # Para Eigenfaces (float64)
@@ -167,56 +260,105 @@ class MLService:
         all_labels = []
         original_images_by_person = {}
 
+        # Contador para estadísticas
+        total_original_images = 0
+        total_augmented_images = 0
+
         for person_id, images in images_by_person.items():
+            print(f"👤 Procesando persona ID {person_id}: {len(images)} imágenes originales")
+
             person_originals = []
-            person_eigenfaces = []
-            person_lbp = []
+            person_eigenfaces_processed = []
+            person_lbp_processed = []
 
             for image in images:
-                # Guardar imagen original
+                total_original_images += 1
+
+                # Guardar imagen original (sin modificar)
                 person_originals.append(image.copy())
 
-                # Procesar para entrenamiento (obtiene float64 normalizada)
+                # Procesar imagen para entrenamiento
                 processed_face = self.preprocess_image_for_training(image)
-                if processed_face is not None:
-                    # ✅ SEPARAR PROCESAMIENTO POR ALGORITMO
+                if processed_face is None:
+                    print(f"   ⚠️ No se pudo preprocesar una imagen")
+                    continue
 
-                    # Para Eigenfaces: usar directamente la imagen procesada (float64)
-                    eigenfaces_image = processed_face.copy()
-                    all_images_eigenfaces.append(eigenfaces_image)
-                    person_eigenfaces.append(eigenfaces_image)
+                # Guardar versión procesada para cada algoritmo
+                person_eigenfaces_processed.append(processed_face)  # float64 [0,1]
+                person_lbp_processed.append((processed_face * 255).astype(np.uint8))  # uint8 [0,255]
 
-                    # Para LBP: convertir a uint8 para CLAHE
-                    lbp_image = (processed_face * 255).astype(np.uint8)
-                    all_images_lbp.append(lbp_image)
-                    person_lbp.append(lbp_image)
+            # APLICAR DATA AUGMENTATION por persona
+            if person_eigenfaces_processed:
+                # Augmentar para Eigenfaces
+                augmented_eigenfaces = self._apply_data_augmentation(person_eigenfaces_processed)
 
+                # Augmentar para LBP
+                augmented_lbp = self._apply_data_augmentation(person_lbp_processed)
+
+                # Verificar que ambos tengan la misma cantidad
+                if len(augmented_eigenfaces) != len(augmented_lbp):
+                    print(f"   ⚠️ Advertencia: Desbalance en augmentation")
+
+                # Añadir a los conjuntos globales
+                for eigen_img, lbp_img in zip(augmented_eigenfaces, augmented_lbp):
+                    all_images_eigenfaces.append(eigen_img)
+                    all_images_lbp.append(lbp_img)
                     all_labels.append(person_id)
+                    total_augmented_images += 1
 
-            if person_originals:
+                # Guardar originales (sin augmentation) para características
                 original_images_by_person[person_id] = person_originals
 
-        print(f"📊 Datos preparados:")
+                print(f"   ✅ {len(person_eigenfaces_processed)} → {len(augmented_eigenfaces)} imágenes")
+
+        print()
+        print("=" * 60)
+        print("📊 RESUMEN DE DATOS PREPARADOS:")
+        print("=" * 60)
+        print(f"   • Imágenes originales: {total_original_images}")
+        print(f"   • Imágenes para entrenamiento: {total_augmented_images}")
+        print(
+            f"   • Factor de augmentation: {total_augmented_images / total_original_images:.1f}x" if total_original_images > 0 else "N/A")
+        print(f"   • Personas únicas: {len(set(all_labels))}")
         print(f"   • Eigenfaces: {len(all_images_eigenfaces)} imágenes (float64)")
         print(f"   • LBP: {len(all_images_lbp)} imágenes (uint8)")
-        print(f"   • Etiquetas: {len(all_labels)}")
+        print()
+
+        # Verificar que tengamos suficientes datos
+        if len(all_labels) < 2:
+            raise ValueError("Se necesitan al menos 2 imágenes para entrenar")
 
         # ✅ ENTRENAR CON DATOS ESPECÍFICOS PARA CADA ALGORITMO
-        print("🎓 Entrenando Eigenfaces...")
-        self.eigenfaces_service.train(all_images_eigenfaces, all_labels)
+        print("=" * 60)
+        print("🎓 ENTRENANDO ALGORITMOS")
+        print("=" * 60)
 
-        print("🎓 Entrenando LBP...")
+        print("🔹 Entrenando Eigenfaces...")
+        self.eigenfaces_service.train(all_images_eigenfaces, all_labels)
+        print("   ✅ Eigenfaces entrenado")
+
+        print()
+        print("🔹 Entrenando LBP...")
         self.lbp_service.train(all_images_lbp, all_labels)
+        print("   ✅ LBP entrenado")
+
+        print()
 
         # Guardar modelos
+        print("💾 Guardando modelos...")
         self.eigenfaces_service.save_model()
         self.lbp_service.save_model()
         self.is_trained = True
+        print("   ✅ Modelos guardados")
+        print()
 
-        # Estadísticas
+        # Estadísticas del entrenamiento
         training_stats = {
             "timestamp": datetime.now().isoformat(),
             "total_images": len(all_labels),
+            "total_original_images": total_original_images,
+            "augmentation_factor": total_augmented_images / total_original_images if total_original_images > 0 else 1.0,
+            "augmentation_enabled": MLConfig.USE_AUGMENTATION,
             "unique_persons": len(set(all_labels)),
             "eigenfaces_info": self.eigenfaces_service.get_model_info(),
             "lbp_info": self.lbp_service.get_model_info(),
@@ -224,17 +366,46 @@ class MLService:
             "data_types_used": {
                 "eigenfaces": "float64 [0,1]",
                 "lbp": "uint8 [0,255]"
+            },
+            "config_used": {
+                "use_quality_check": MLConfig.USE_QUALITY_CHECK,
+                "use_face_alignment": MLConfig.USE_FACE_ALIGNMENT,
+                "use_advanced_illumination": MLConfig.USE_ADVANCED_ILLUMINATION,
+                "use_augmentation": MLConfig.USE_AUGMENTATION
             }
         }
 
-        # ⚡ USAR IMÁGENES ORIGINALES para características
+        # USAR IMÁGENES ORIGINALES (sin augmentation) para características en BD
+        print("💾 Guardando características en base de datos...")
         try:
             self._save_characteristics_to_db(original_images_by_person)
-            self._save_training_record(training_stats)
+            print("   ✅ Características guardadas")
         except Exception as e:
-            print(f"⚠️ Error en BD: {e}")
+            print(f"   ⚠️ Error guardando características: {e}")
+            import traceback
+            traceback.print_exc()
 
-        print(f"✅ ENTRENAMIENTO COMPLETADO EXITOSAMENTE!")
+        print()
+        print("💾 Guardando registro de entrenamiento...")
+        try:
+            self._save_training_record(training_stats)
+            print("   ✅ Registro guardado")
+        except Exception as e:
+            print(f"   ⚠️ Error guardando registro: {e}")
+
+        print()
+        print("=" * 60)
+        print("✅ ENTRENAMIENTO COMPLETADO EXITOSAMENTE")
+        print("=" * 60)
+        print(f"📊 Resumen:")
+        print(f"   • {training_stats['unique_persons']} personas")
+        print(f"   • {training_stats['total_original_images']} imágenes originales")
+        print(f"   • {training_stats['total_images']} imágenes de entrenamiento")
+        if MLConfig.USE_AUGMENTATION:
+            print(f"   • Factor de augmentation: {training_stats['augmentation_factor']:.1f}x")
+        print("=" * 60)
+        print()
+
         return training_stats
 
     def _clean_for_json_storage(self, features: np.ndarray) -> list:
@@ -1030,6 +1201,104 @@ class MLService:
         else:
             needed = requirements["min_required"] - requirements["users_with_images"]
             return f"⏳ Se necesitan {needed} usuarios más con imágenes para entrenar"
+
+    def _adaptive_fusion(self, eigen_result: dict, lbp_result: dict) -> dict:
+        """
+        Fusión adaptativa que ajusta pesos según confianza individual
+        """
+        eigen_conf = eigen_result.get("confidence", 0)
+        lbp_conf = lbp_result.get("confidence", 0)
+        eigen_id = eigen_result.get("person_id", -1)
+        lbp_id = lbp_result.get("person_id", -1)
+
+        # CASO 1: Ambos coinciden
+        if eigen_id == lbp_id and eigen_id != -1:
+            total_conf = eigen_conf + lbp_conf
+            weight_eigen = eigen_conf / total_conf if total_conf > 0 else 0.5
+            weight_lbp = lbp_conf / total_conf if total_conf > 0 else 0.5
+
+            final_confidence = weight_eigen * eigen_conf + weight_lbp * lbp_conf
+            final_confidence = min(final_confidence * MLConfig.CONSENSUS_BONUS, 100)
+
+            return {
+                "person_id": eigen_id,
+                "confidence": final_confidence,
+                "method": "adaptive_consensus",
+                "details": {
+                    "eigen_weight": round(weight_eigen, 3),
+                    "lbp_weight": round(weight_lbp, 3),
+                    "consensus": True
+                }
+            }
+
+        # CASO 2: No coinciden pero ambos reconocieron
+        elif eigen_id != -1 and lbp_id != -1:
+            if eigen_conf > lbp_conf:
+                final_id = eigen_id
+                final_conf = eigen_conf * MLConfig.CONFLICT_PENALTY
+                winner = "eigenfaces"
+            else:
+                final_id = lbp_id
+                final_conf = lbp_conf * MLConfig.CONFLICT_PENALTY
+                winner = "lbp"
+
+            return {
+                "person_id": final_id,
+                "confidence": final_conf,
+                "method": "adaptive_best",
+                "details": {
+                    "winner": winner,
+                    "consensus": False
+                }
+            }
+
+        # CASO 3: Solo uno reconoció
+        elif eigen_id != -1:
+            return {
+                "person_id": eigen_id,
+                "confidence": eigen_conf * 0.9,
+                "method": "eigenfaces_only"
+            }
+        elif lbp_id != -1:
+            return {
+                "person_id": lbp_id,
+                "confidence": lbp_conf * 0.9,
+                "method": "lbp_only"
+            }
+
+        # CASO 4: Ninguno reconoció
+        return {
+            "person_id": -1,
+            "confidence": 0,
+            "method": "no_recognition"
+        }
+
+    def preprocess_image_with_quality_check(self, image: np.ndarray) -> tuple:
+        """
+        Preprocesa imagen con verificación de calidad
+        Retorna: (imagen_procesada, quality_metrics)
+        """
+        # Verificar calidad
+        quality_metrics = self.quality_checker.check_image_quality(image)
+
+        # Intentar alinear si está disponible
+        aligned_image = image
+        if self.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
+            aligned = self.face_aligner.align_face(image)
+            if aligned is not None:
+                aligned_image = aligned
+                quality_metrics["face_aligned"] = True
+            else:
+                quality_metrics["face_aligned"] = False
+
+        # Preprocesar con método avanzado si está habilitado
+        if MLConfig.USE_ADVANCED_ILLUMINATION:
+            processed = self.image_preprocessor.preprocess_with_advanced_illumination(aligned_image)
+        else:
+            processed = self.preprocess_image_for_training(aligned_image)
+
+        return processed, quality_metrics
+
 
     def benchmark_algorithms(self, test_images: List[Tuple[np.ndarray, int]]) -> Dict[str, Any]:
         """

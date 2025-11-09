@@ -18,6 +18,7 @@ seaborn
 scipy
 pandas
 joblib
+mediapipe
 
 # Utilities
 python-dotenv
