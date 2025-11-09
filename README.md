@@ -676,7 +676,7 @@ MIT License - Ver archivo LICENSE para más detalles
 ## 👨‍💻 Autor
 
 **Adrián Cisneros**  
-📧 Email: acisneros@upao.edu.pe  
+📧 Email: nicolocisneros@gmail.com 
 🎓 Universidad: Universidad Privada Antenor Orrego
 
 ---
