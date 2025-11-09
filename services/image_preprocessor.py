@@ -346,6 +346,94 @@ class ImagePreprocessor:
 
         return debug_info
 
+    def apply_homomorphic_filter(self, image: np.ndarray) -> np.ndarray:
+        """
+        Filtro homomórfico para normalización robusta de iluminación
+        """
+        try:
+            # Asegurar que es uint8
+            if image.dtype != np.uint8:
+                image = (image * 255).astype(np.uint8) if image.max() <= 1 else image.astype(np.uint8)
+
+            # Convertir a float y aplicar log
+            img_float = image.astype(np.float32) + 1.0
+            img_log = np.log(img_float)
+
+            # FFT
+            img_fft = np.fft.fft2(img_log)
+            img_fft_shift = np.fft.fftshift(img_fft)
+
+            # Crear filtro pasa-altas gaussiano
+            rows, cols = image.shape
+            crow, ccol = rows // 2, cols // 2
+
+            # Parámetros optimizados
+            gamma_low = 0.3
+            gamma_high = 1.5
+            c = 1.0
+            d0 = 30
+
+            # Malla de distancias
+            x = np.arange(-ccol, cols - ccol)
+            y = np.arange(-crow, rows - crow)
+            X, Y = np.meshgrid(x, y)
+            D = np.sqrt(X ** 2 + Y ** 2)
+
+            # Filtro homomórfico
+            H = (gamma_high - gamma_low) * (1 - np.exp(-c * (D ** 2) / (d0 ** 2))) + gamma_low
+
+            # Aplicar filtro
+            img_filtered = img_fft_shift * H
+            img_filtered = np.fft.ifftshift(img_filtered)
+            img_filtered = np.fft.ifft2(img_filtered)
+            img_filtered = np.real(img_filtered)
+
+            # Exponencial y normalización
+            img_output = np.exp(img_filtered) - 1.0
+            img_output = np.clip(img_output, 0, 255).astype(np.uint8)
+
+            print("✅ Filtro homomórfico aplicado")
+            return img_output
+
+        except Exception as e:
+            print(f"⚠️ Error en filtro homomórfico: {e}, usando imagen original")
+            return image
+
+    def preprocess_with_advanced_illumination(self, image: np.ndarray, target_size: tuple = (100, 100)) -> np.ndarray:
+        """
+        Preprocesamiento mejorado con normalización avanzada de iluminación
+        """
+        try:
+            # 1. Convertir a escala de grises
+            if len(image.shape) == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = image.copy()
+
+            # 2. Redimensionar
+            resized = cv2.resize(gray, target_size, interpolation=cv2.INTER_AREA)
+
+            # 3. Aplicar filtro homomórfico
+            homomorphic = self.apply_homomorphic_filter(resized)
+
+            # 4. CLAHE adaptativo
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            equalized = clahe.apply(homomorphic)
+
+            # 5. Suavizado ligero
+            smoothed = cv2.GaussianBlur(equalized, (3, 3), 0)
+
+            # 6. Normalizar a float64 [0,1] para Eigenfaces
+            normalized = smoothed.astype(np.float64) / 255.0
+
+            print("✅ Preprocesamiento avanzado completado")
+            return normalized
+
+        except Exception as e:
+            print(f"❌ Error en preprocesamiento avanzado: {e}")
+            # Fallback al método básico
+            return self.preprocess_for_eigenfaces(image, target_size)
+
     def compare_algorithm_preprocessing(self, image: np.ndarray) -> dict:
         """
         ✅ NUEVO: Compara el preprocesamiento para diferentes algoritmos

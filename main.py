@@ -119,14 +119,17 @@ async def startup_event():
         # Los directorios ya se crearon al inicio del archivo
         print("✅ Directorios de almacenamiento ya creados")
 
-        # Verificar conexión a base de datos PRIMERO
+        # Crear base de datos si no existe
+        print("🔄 Verificando/Creando base de datos...")
+        create_database_if_not_exists()
+
+        # Verificar conexión a base de datos
         print("🔄 Verificando conexión a base de datos...")
         if not test_connection():
             print("❌ Error crítico: No se puede conectar a la base de datos")
+            print("💡 Verifica que MySQL esté ejecutándose")
+            print(f"💡 Verifica las credenciales en el archivo .env")
             raise Exception("Conexión a base de datos falló")
-
-        # Crear base de datos si no existe (solo local)
-        create_database_if_not_exists()
 
         # Inicializar tablas
         print("🔄 Inicializando estructura de base de datos...")

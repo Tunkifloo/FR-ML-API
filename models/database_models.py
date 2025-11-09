@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, ForeignKey, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -50,6 +50,9 @@ class ImagenFacial(Base):
     alto = Column(Integer)
     formato = Column(String(10))  # jpg, png, etc.
     tamano_bytes = Column(Integer)
+    quality_score = Column(Float, nullable=True)  # Score de calidad 0-100
+    quality_level = Column(String(20), nullable=True)  # Excelente, Buena, Aceptable, Pobre
+    face_aligned = Column(Boolean, default=False)
 
     fecha_subida = Column(DateTime, default=datetime.utcnow)
     activa = Column(Boolean, default=True)
