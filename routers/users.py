@@ -11,7 +11,8 @@ import numpy as np
 
 from config.database import get_db
 from config.ml_config import MLConfig
-from models.database_models import Usuario, ImagenFacial, CaracteristicasFaciales, asignar_requisitoriado_aleatorio
+from models.database_models import Usuario, ImagenFacial, CaracteristicasFaciales, asignar_requisitoriado_aleatorio, \
+    HistorialReconocimiento
 from models.pydantic_models import (
     UsuarioCreate, UsuarioUpdate, Usuario as UsuarioResponse, UsuarioDetallado,
     ResponseWithData, ResponsePaginado, ErrorResponse, FiltroUsuarios, Paginacion
@@ -839,8 +840,10 @@ async def obtener_usuario_por_id(
                 db=db
             )
 
+        # --- INICIO DE LA CORRECCIÓN ---
         # Si no tiene ID de estudiante, procesar directamente
-        # (Lógica similar pero usando ID numérico)
+
+        # 1. Crear el diccionario base (AHORA SÍ INCLUYE 'activo')
         usuario_data = {
             "id": usuario.id,
             "nombre": usuario.nombre,
@@ -851,13 +854,103 @@ async def obtener_usuario_por_id(
             "tipo_requisitoria": usuario.tipo_requisitoria,
             "fecha_registro": usuario.fecha_registro.isoformat(),
             "fecha_actualizacion": usuario.fecha_actualizacion.isoformat(),
-            "activo": usuario.activo
+            "activo": usuario.activo  # <-- ¡CORREGIDO! Línea incluida.
         }
 
-        # Resto de lógica similar al endpoint por ID de estudiante...
+        # 2. Contar total de imágenes (siempre se cuenta)
+        total_imagenes = db.query(ImagenFacial).filter(
+            ImagenFacial.usuario_id == usuario.id,
+            ImagenFacial.activa == True
+        ).count()
+        usuario_data["total_imagenes"] = total_imagenes
+
         if incluir_imagenes:
-            # Lógica de imágenes igual que arriba
-            pass
+            # 3. Buscar imagen principal
+            imagen_principal = db.query(ImagenFacial).filter(
+                ImagenFacial.usuario_id == usuario.id,
+                ImagenFacial.activa == True,
+                ImagenFacial.es_principal == True
+            ).first()
+
+            if not imagen_principal:
+                imagen_principal = db.query(ImagenFacial).filter(
+                    ImagenFacial.usuario_id == usuario.id,
+                    ImagenFacial.activa == True
+                ).order_by(ImagenFacial.fecha_subida.asc()).first()
+
+            if imagen_principal:
+                # Convertir imagen a base64 para preview
+                imagen_base64 = convert_image_to_base64(imagen_principal.ruta_archivo)
+                usuario_data["imagen_principal"] = {
+                    "id": imagen_principal.id,
+                    "nombre_archivo": imagen_principal.nombre_archivo,
+                    "formato": imagen_principal.formato,
+                    "fecha_subida": imagen_principal.fecha_subida.isoformat(),
+                    "es_principal": imagen_principal.es_principal,
+                    "imagen_base64": imagen_base64,
+                    "imagen_url": f"/images/{os.path.basename(imagen_principal.ruta_archivo)}"
+                }
+            else:
+                usuario_data["imagen_principal"] = None
+
+            # 4. Incluir el array de todas las imágenes
+            imagenes = db.query(ImagenFacial).filter(
+                ImagenFacial.usuario_id == usuario.id,
+                ImagenFacial.activa == True
+            ).order_by(ImagenFacial.es_principal.desc(), ImagenFacial.fecha_subida.asc()).all()
+
+            usuario_data["imagenes"] = []
+            for img in imagenes:
+                img_base64_full = convert_image_to_base64(img.ruta_archivo)
+                usuario_data["imagenes"].append({
+                    "id": img.id,
+                    "nombre_archivo": img.nombre_archivo,
+                    "es_principal": img.es_principal,
+                    "formato": img.formato,
+                    "tamano_bytes": img.tamano_bytes,
+                    "ancho": img.ancho,
+                    "alto": img.alto,
+                    "fecha_subida": img.fecha_subida.isoformat(),
+                    "imagen_base64": img_base64_full,
+                    "imagen_url": f"/images/{os.path.basename(img.ruta_archivo)}"
+                })
+
+        if incluir_reconocimientos:
+            # 5. Cargar reconocimientos recientes
+            recientes = db.query(HistorialReconocimiento).filter(
+                HistorialReconocimiento.usuario_id == usuario.id
+            ).order_by(HistorialReconocimiento.fecha_reconocimiento.desc()).limit(10).all()
+
+            usuario_data["reconocimientos_recientes"] = [
+                {
+                    "id": rec.id,
+                    "confianza": rec.confianza,
+                    "reconocido": rec.reconocido,
+                    "alerta_generada": rec.alerta_generada,
+                    "fecha": rec.fecha_reconocimiento.isoformat(),
+                    "ip_origen": rec.ip_origen,
+                    "distancia_euclidiana": rec.distancia_euclidiana
+                } for rec in recientes
+            ]
+
+            # 6. Cargar estadísticas de reconocimiento
+            total_rec = db.query(HistorialReconocimiento).filter(
+                HistorialReconocimiento.usuario_id == usuario.id
+            ).count()
+
+            exitosos_rec = db.query(HistorialReconocimiento).filter(
+                HistorialReconocimiento.usuario_id == usuario.id,
+                HistorialReconocimiento.reconocido == True
+            ).count()
+
+            tasa_exito = (exitosos_rec / total_rec * 100) if total_rec > 0 else 0
+
+            usuario_data["estadisticas_reconocimiento"] = {
+                "total_reconocimientos": total_rec,
+                "reconocimientos_exitosos": exitosos_rec,
+                "tasa_exito": tasa_exito
+            }
+
 
         return ResponseWithData(
             success=True,
