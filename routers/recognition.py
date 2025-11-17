@@ -118,40 +118,29 @@ async def identificar_persona(
         db: Session = Depends(get_db)
 ):
     """
-    CORREGIDO: Identificación robusta con manejo de errores mejorado
+    CORREGIDO: Identificación robusta. El MLService se encarga de la
+    detección, recorte, alineación y preprocesamiento.
     """
     temp_file_path = None
 
     try:
         print(f"🔍 Iniciando identificación con algoritmo: {algoritmo.value}")
 
-        # PASO 1: Validaciones básicas
+        # PASO 1: Validaciones básicas (Sin cambios)
         if not validate_image_file(imagen):
-            raise HTTPException(
-                status_code=400,
-                detail="El archivo debe ser una imagen válida (jpg, jpeg, png, bmp)"
-            )
-
-        # Verificar tamaño de archivo
+            raise HTTPException(status_code=400, detail="El archivo debe ser una imagen válida.")
         if imagen.size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"El archivo excede el tamaño máximo permitido ({MAX_FILE_SIZE / (1024 * 1024):.1f} MB)"
-            )
+            raise HTTPException(status_code=400, detail="El archivo excede el tamaño máximo.")
 
-        # PASO 2: Verificar modelo entrenado
+        # PASO 2: Verificar modelo entrenado (Sin cambios)
         if not ml_service.load_models():
-            raise HTTPException(
-                status_code=503,
-                detail="El modelo de reconocimiento no está entrenado. Entrene el modelo primero usando /api/v1/usuarios/entrenar-modelo"
-            )
+            raise HTTPException(status_code=503, detail="El modelo de reconocimiento no está entrenado.")
 
-        # PASO 3: Guardar archivo temporal
+        # PASO 3: Guardar archivo temporal (Sin cambios)
         file_extension = os.path.splitext(imagen.filename)[1]
         temp_filename = f"recognition_{uuid.uuid4().hex}{file_extension}"
         temp_file_path = os.path.join(TEMP_DIR, temp_filename)
 
-        # Guardar con validación
         try:
             with open(temp_file_path, "wb") as buffer:
                 content = await imagen.read()
@@ -161,22 +150,14 @@ async def identificar_persona(
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Error guardando archivo: {str(e)}")
 
-        # PASO 4: Leer y validar imagen
+        # PASO 4: Leer y validar imagen (Sin cambios)
         img = cv2.imread(temp_file_path)
         if img is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No se pudo leer la imagen. El archivo puede estar corrupto."
-            )
-
-        # Validar dimensiones mínimas
+            raise HTTPException(status_code=400, detail="No se pudo leer la imagen (corrupta?).")
         if img.shape[0] < 50 or img.shape[1] < 50:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Imagen muy pequeña ({img.shape[1]}x{img.shape[0]}). Mínimo: 50x50 píxeles."
-            )
+            raise HTTPException(status_code=400, detail="Imagen muy pequeña. Mínimo: 50x50.")
 
-        # NUEVO: Verificar calidad de imagen
+        # PASO 4.5: Verificación de calidad (Opcional, pero está bien aquí)
         quality_info = {}
         if MLConfig.USE_QUALITY_CHECK:
             quality_metrics = ml_service.quality_checker.check_image_quality(img)
@@ -185,41 +166,33 @@ async def identificar_persona(
                 "quality_score": quality_metrics['overall_score'],
                 "is_acceptable": quality_metrics['is_acceptable']
             }
-
             print(
                 f"📊 Calidad de consulta: {quality_metrics['quality_level']} ({quality_metrics['overall_score']:.1f}/100)")
 
-            # Advertir pero NO rechazar (en reconocimiento somos más permisivos)
-            if quality_metrics['overall_score'] < 30:
-                print(f"⚠️ ADVERTENCIA: Imagen de muy baja calidad")
+        # 🚨 BLOQUE DE ALINEACIÓN ELIMINADO 🚨
+        # MLService.recognize_face() ahora llama a _get_processed_face_from_image,
+        # que ya contiene la lógica de detección, RECORTE y ALINEACIÓN.
+        # No debemos alinear la imagen completa aquí.
 
-        # NUEVO: Intentar alinear rostro para mejorar reconocimiento
-        if ml_service.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
-            aligned = ml_service.face_aligner.align_face(img)
-            if aligned is not None:
-                img = aligned  # Usar imagen alineada
-                quality_info["face_aligned"] = True
-                print(f"✅ Rostro alineado para reconocimiento")
-            else:
-                quality_info["face_aligned"] = False
+        print(f"✅ Imagen original lista para MLService: {img.shape}")
 
-        print(f"✅ Imagen procesada: {img.shape}, tamaño: {imagen.size} bytes")
-
-        # PASO 5: Realizar reconocimiento con manejo de errores
+        # PASO 5: Realizar reconocimiento
         start_time = datetime.now()
 
         try:
             recognition_result = ml_service.recognize_face(img, method=algoritmo.value)
             end_time = datetime.now()
 
-            # Convertir tipos numpy a tipos nativos Python
+            # ⚡ ¡Aquí! Esta función AHORA limpiara todo el diccionario
+            # (incluyendo 'details' y 'caracteristicas_consulta')
             recognition_result = convert_numpy_types(recognition_result)
+
             processing_time = (end_time - start_time).total_seconds()
 
             print(f"✅ Reconocimiento completado en {processing_time:.3f}s")
 
         except Exception as e:
-            print(f"❌ Error en reconocimiento facial: {e}")
+            print(f"❌ Error en ml_service.recognize_face: {e}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Error procesando la imagen con {algoritmo.value}: {str(e)}"

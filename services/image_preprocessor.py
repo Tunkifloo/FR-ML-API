@@ -6,7 +6,7 @@ import os
 
 class ImagePreprocessor:
     """
-    ✅ CORREGIDO: Preprocesador unificado de imágenes con manejo robusto de tipos de datos
+    Preprocesador unificado de imágenes con manejo robusto de tipos de datos
     """
 
     def __init__(self, target_size: Tuple[int, int] = (100, 100)):
@@ -15,15 +15,11 @@ class ImagePreprocessor:
 
     def preprocess_for_ml(self, image: np.ndarray, algorithm: str = "both") -> np.ndarray:
         """
-        ✅ CORREGIDO: Preprocesa imagen con manejo específico por algoritmo
-
-        Args:
-            image: Imagen original (cualquier formato)
-            algorithm: "eigenfaces", "lbp", o "both"
+        Preprocesa imagen con manejo específico por algoritmo
         """
         print(f"🔧 Preprocessing para {algorithm}: input shape {image.shape}, dtype {image.dtype}")
 
-        # PASO 1: Normalizar dimensiones
+        # PASO 1: Normalizar dimensiones (maneja vectores 1D)
         processed = self._normalize_dimensions(image)
 
         # PASO 2: Convertir a escala de grises si es necesario
@@ -33,10 +29,11 @@ class ImagePreprocessor:
 
         # PASO 3: Redimensionar SIEMPRE al tamaño target
         if processed.shape != self.target_size:
-            processed = cv2.resize(processed, self.target_size, interpolation=cv2.INTER_LANCZOS4)
+            # Usar INTER_AREA para reducir, que es más rápido y mejor
+            processed = cv2.resize(processed, self.target_size, interpolation=cv2.INTER_AREA)
             print(f"🔧 Redimensionada: {processed.shape}")
 
-        # ✅ PASO 4: PROCESAMIENTO ESPECÍFICO POR ALGORITMO
+        # PASO 4: PROCESAMIENTO ESPECÍFICO POR ALGORITMO
         if algorithm == "eigenfaces":
             return self._preprocess_for_eigenfaces(processed)
         elif algorithm == "lbp":
@@ -48,21 +45,13 @@ class ImagePreprocessor:
 
     def _preprocess_for_eigenfaces(self, image: np.ndarray) -> np.ndarray:
         """
-        ✅ NUEVO: Preprocesamiento específico para Eigenfaces (salida: float64 [0,1])
+        Preprocesamiento específico para Eigenfaces (salida: float64 [0,1])
         """
-        print(f"🔧 Preprocesando para Eigenfaces...")
-
         # Asegurar tipo uint8 ANTES de operaciones OpenCV
         if image.dtype != np.uint8:
-            if image.max() <= 1.0:
-                processed = (image * 255).astype(np.uint8)
-            else:
-                processed = np.clip(image, 0, 255).astype(np.uint8)
+            processed = (image * 255).astype(np.uint8) if image.max() <= 1.0 else np.clip(image, 0, 255).astype(np.uint8)
         else:
             processed = image.copy()
-
-        # Aplicar filtros básicos (en uint8)
-        processed = cv2.GaussianBlur(processed, (3, 3), 0)
 
         # Ecualización básica para Eigenfaces
         processed = cv2.equalizeHist(processed)
@@ -70,94 +59,56 @@ class ImagePreprocessor:
         # CONVERTIR A FLOAT64 [0,1] PARA PCA
         processed = processed.astype(np.float64) / 255.0
 
-        print(f"✅ Eigenfaces listo: dtype={processed.dtype}, range=[{processed.min():.3f}, {processed.max():.3f}]")
         return processed
 
     def _preprocess_for_lbp(self, image: np.ndarray) -> np.ndarray:
         """
-        ✅ NUEVO: Preprocesamiento específico para LBP (salida: uint8 [0,255])
+        Preprocesamiento específico para LBP (salida: uint8 [0,255])
         """
-        print(f"🔧 Preprocesando para LBP...")
-
         # Asegurar tipo uint8 ANTES de cualquier operación
         if image.dtype != np.uint8:
-            if image.max() <= 1.0:
-                processed = (image * 255).astype(np.uint8)
-            else:
-                processed = np.clip(image, 0, 255).astype(np.uint8)
+            processed = (image * 255).astype(np.uint8) if image.max() <= 1.0 else np.clip(image, 0, 255).astype(np.uint8)
         else:
             processed = image.copy()
 
-        # Aplicar filtros básicos (en uint8)
-        processed = cv2.GaussianBlur(processed, (3, 3), 0)
-
-        # Ecualización adaptiva CLAHE (solo funciona con uint8)
+        # Ecualización adaptiva CLAHE
         try:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             processed = clahe.apply(processed)
-            print(f"✅ CLAHE aplicado exitosamente")
-        except Exception as e:
-            print(f"⚠️ Error en CLAHE: {e}, usando ecualización básica")
+        except Exception:
             processed = cv2.equalizeHist(processed)
 
         # MANTENER COMO UINT8 PARA LBP
-        print(f"✅ LBP listo: dtype={processed.dtype}, range=[{processed.min()}, {processed.max()}]")
         return processed
 
     def _preprocess_for_both(self, image: np.ndarray) -> np.ndarray:
         """
-        ✅ NUEVO: Preprocesamiento para ambos algoritmos (salida: float64 [0,1])
+        Preprocesamiento base para ambos (salida: float64 [0,1])
         """
-        print(f"🔧 Preprocesando para ambos algoritmos...")
-
-        # Asegurar tipo uint8 ANTES de operaciones OpenCV
         if image.dtype != np.uint8:
-            if image.max() <= 1.0:
-                processed = (image * 255).astype(np.uint8)
-            else:
-                processed = np.clip(image, 0, 255).astype(np.uint8)
+            processed = (image * 255).astype(np.uint8) if image.max() <= 1.0 else np.clip(image, 0, 255).astype(np.uint8)
         else:
             processed = image.copy()
 
-        # Aplicar filtros básicos
-        processed = cv2.GaussianBlur(processed, (3, 3), 0)
-
-        # Ecualización básica (compatible con ambos)
         processed = cv2.equalizeHist(processed)
 
         # CONVERTIR A FLOAT64 [0,1] COMO BASE
-        # (LBP puede convertir de vuelta a uint8 cuando sea necesario)
         processed = processed.astype(np.float64) / 255.0
-
-        print(
-            f"✅ Ambos algoritmos listo: dtype={processed.dtype}, range=[{processed.min():.3f}, {processed.max():.3f}]")
         return processed
 
     def _normalize_dimensions(self, image: np.ndarray) -> np.ndarray:
-        """
-        ✅ CORREGIDO: Normaliza dimensiones manteniendo tipos correctos
-        """
-        print(f"🔍 Normalizando dimensiones: {image.shape}, dtype: {image.dtype}")
-
+        """Normaliza dimensiones manteniendo tipos correctos"""
         if len(image.shape) == 1:
-            # Vector 1D - reformatear
             if image.shape[0] == self.target_pixels:
-                reshaped = image.reshape(self.target_size)
-                print(f"🔧 Vector 1D reformateado a target_size: {reshaped.shape}")
-                return reshaped
+                return image.reshape(self.target_size)
             else:
-                # Intentar formar cuadrado perfecto
                 size = int(np.sqrt(image.shape[0]))
                 if size * size == image.shape[0]:
-                    reshaped = image.reshape(size, size)
-                    print(f"🔧 Vector 1D reformateado a cuadrado: {reshaped.shape}")
-                    return reshaped
+                    return image.reshape(size, size)
                 else:
                     raise ValueError(f"Vector 1D {image.shape} no puede ser reformateado a imagen válida")
-
         elif len(image.shape) in [2, 3]:
             return image
-
         else:
             raise ValueError(f"Dimensiones no soportadas: {image.shape}")
 

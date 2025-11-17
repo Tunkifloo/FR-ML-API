@@ -17,7 +17,7 @@ class ImageProcessor:
         Inicializa el procesador de imágenes
         """
         # Configuración de procesamiento
-        self.target_size = (224, 224)  # Tamaño estándar para procesamiento
+        self.target_size = (100, 100)  # Tamaño estándar para procesamiento
         self.quality_threshold = 50  # Umbral mínimo de calidad
 
         # Configuración de mejoras
@@ -200,42 +200,52 @@ class ImageProcessor:
 
         return best_image, rotation_info
 
+    import numpy as np
+
+    def convert_numpy_types(data):
+        """
+        Recorre recursivamente un diccionario o lista y convierte todos los
+        tipos de NumPy (np.bool_, np.int64, np.float64, etc.)
+        a tipos nativos de Python (bool, int, float) que son JSON serializables.
+        """
+        if isinstance(data, dict):
+            # Es un diccionario, ¡limpiemos dentro!~
+            return {k: convert_numpy_types(v) for k, v in data.items()}
+
+        elif isinstance(data, list):
+            # Es una lista, ¡limpiemos cada cosita!~
+            return [convert_numpy_types(item) for item in data]
+
+        elif isinstance(data, np.bool_):
+            # ¡Un bool raro! Conviértelo a bool normalito
+            return bool(data)
+
+        elif isinstance(data, np.integer):
+            # ¡Un int raro! Conviértelo a int normalito
+            return int(data)
+
+        elif isinstance(data, np.floating):
+            # ¡Un float raro! Conviértelo a float normalito
+            return float(data)
+
+        elif isinstance(data, np.ndarray):
+            # ¡Un array! Conviértelo a lista normalita
+            return data.tolist()
+
+        else:
+            # Es un tipo normalito, ¡déjalo así!~
+            return data
+
     def resize_image(self, image: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
         """
-        Redimensiona la imagen manteniendo la relación de aspecto
+        ✅ CORREGIDO: Redimensiona la imagen "estirándola" (stretch/warp)
+        para que coincida con el tamaño exacto requerido por Eigenfaces/LBP,
+        sin mantener la proporción ni añadir padding.
         """
-        height, width = image.shape[:2]
-        target_width, target_height = target_size
 
-        # Calcular la escala manteniendo proporción
-        scale = min(target_width / width, target_height / height)
-
-        # Nuevo tamaño
-        new_width = int(width * scale)
-        new_height = int(height * scale)
-
-        # Redimensionar
-        resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
-
-        # Crear imagen final con padding si es necesario
-        if new_width != target_width or new_height != target_height:
-            # Crear imagen con fondo negro
-            if len(image.shape) == 3:
-                final_image = np.zeros((target_height, target_width, 3), dtype=image.dtype)
-            else:
-                final_image = np.zeros((target_height, target_width), dtype=image.dtype)
-
-            # Calcular posición para centrar
-            start_y = (target_height - new_height) // 2
-            start_x = (target_width - new_width) // 2
-
-            # Colocar imagen redimensionada en el centro
-            if len(image.shape) == 3:
-                final_image[start_y:start_y + new_height, start_x:start_x + new_width] = resized
-            else:
-                final_image[start_y:start_y + new_height, start_x:start_x + new_width] = resized
-
-            return final_image
+        # Simplemente redimensiona (estira) la imagen al tamaño objetivo
+        # INTER_AREA es robusto para reducir imágenes
+        resized = cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
 
         return resized
 

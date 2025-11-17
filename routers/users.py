@@ -133,140 +133,114 @@ async def crear_usuario(
         db: Session = Depends(get_db)
 ):
     """
-    Crea un nuevo usuario con sus imágenes faciales (mínimo 1, máximo 5)
-    CON EXTRACCIÓN AUTOMÁTICA DE CARACTERÍSTICAS Y ENTRENAMIENTO INTELIGENTE
+    Crea un nuevo usuario. Se procesa cada imagen para GUARDA Y PERSISTIR SOLAMENTE
+    el rostro detectado, recortado y alineado.
     """
+    temp_files_to_delete = []  # Para limpieza en caso de error
+
     try:
-        # Validar número de imágenes
+        # Validaciones iniciales (sin cambios)
         if len(imagenes) < 1 or len(imagenes) > 15:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Debe proporcionar entre 1 y 15 imágenes. Recibidas: {len(imagenes)}"
-            )
-
-        print(f"📊 Procesando {len(imagenes)} imágenes para el nuevo usuario")
-
-        # Validar archivos de imagen
+            raise HTTPException(status_code=400, detail="Debe proporcionar entre 1 y 15 imágenes.")
         for img in imagenes:
             if not validate_image_file(img):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Archivo '{img.filename}' no es una imagen válida"
-                )
-
+                raise HTTPException(status_code=400, detail=f"Archivo '{img.filename}' no válido")
             if img.size > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Archivo '{img.filename}' excede el tamaño máximo (10MB)"
-                )
+                raise HTTPException(status_code=400, detail=f"Archivo '{img.filename}' excede 10MB")
+        if db.query(Usuario).filter(Usuario.email == email).first():
+            raise HTTPException(status_code=400, detail="El email ya está registrado")
+        if id_estudiante and db.query(Usuario).filter(Usuario.id_estudiante == id_estudiante).first():
+            raise HTTPException(status_code=400, detail="El ID de estudiante ya está registrado")
 
-        # Verificar si el email ya existe
-        existing_user = db.query(Usuario).filter(Usuario.email == email).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=400,
-                detail="El email ya está registrado"
-            )
-
-        # Verificar si el ID de estudiante ya existe (si se proporciona)
-        if id_estudiante:
-            existing_student = db.query(Usuario).filter(Usuario.id_estudiante == id_estudiante).first()
-            if existing_student:
-                raise HTTPException(
-                    status_code=400,
-                    detail="El ID de estudiante ya está registrado"
-                )
-
-        # Asignar estado de requisitoriado aleatoriamente
+        # Crear usuario (sin cambios)
         es_requisitoriado, tipo_requisitoria = asignar_requisitoriado_aleatorio()
-
-        # Crear usuario
         nuevo_usuario = Usuario(
-            nombre=nombre.title(),
-            apellido=apellido.title(),
-            email=email.lower(),
-            id_estudiante=id_estudiante,
-            requisitoriado=es_requisitoriado,
+            nombre=nombre.title(), apellido=apellido.title(), email=email.lower(),
+            id_estudiante=id_estudiante, requisitoriado=es_requisitoriado,
             tipo_requisitoria=tipo_requisitoria
         )
-
         db.add(nuevo_usuario)
         db.commit()
         db.refresh(nuevo_usuario)
 
-        # Procesar y guardar imágenes CON VERIFICACIÓN DE CALIDAD
+        # ----------------------------------------------------------------------
+        # PROCESO DE IMAGEN: DETECCIÓN, RECORTE Y PERSISTENCIA DE ROSTRO
+        # ----------------------------------------------------------------------
+
         imagenes_guardadas = []
         imagenes_rechazadas = []
 
         for imagen in imagenes:
-            # Generar nombre único
-            file_extension = os.path.splitext(imagen.filename)[1]
-            unique_filename = f"user_{nuevo_usuario.id}_{uuid.uuid4().hex}{file_extension}"
-            file_path = os.path.join(UPLOAD_DIR, unique_filename)
+            original_filename = imagen.filename
 
-            # Guardar archivo temporal
-            with open(file_path, "wb") as buffer:
+            # 1. Guardar archivo original TEMPORALMENTE
+            temp_original_path = os.path.join(UPLOAD_DIR,
+                                              f"temp_{uuid.uuid4().hex}{os.path.splitext(original_filename)[1]}")
+            temp_files_to_delete.append(temp_original_path)
+
+            with open(temp_original_path, "wb") as buffer:
                 shutil.copyfileobj(imagen.file, buffer)
 
-            # NUEVO: Verificar calidad de imagen
-            img_cv = cv2.imread(file_path)
+            img_cv = cv2.imread(temp_original_path)
+
             if img_cv is None:
-                print(f"⚠️ No se pudo leer la imagen: {imagen.filename}")
-                os.remove(file_path)
-                imagenes_rechazadas.append({
-                    "nombre": imagen.filename,
-                    "razon": "Archivo corrupto o formato inválido"
-                })
+                imagenes_rechazadas.append({"nombre": original_filename, "razon": "Archivo corrupto"})
                 continue
 
-            # Verificar calidad si está habilitado
-            if MLConfig.USE_QUALITY_CHECK:
-                quality_metrics = ml_service.quality_checker.check_image_quality(img_cv)
-                print(
-                    f"📊 Calidad de '{imagen.filename}': {quality_metrics['quality_level']} ({quality_metrics['overall_score']:.1f}/100)")
+            # 2. DETECCIÓN Y PREPROCESAMIENTO: OBTENER SOLO EL ROSTRO
+            # (Llama a get_processed_face -> _get_processed_face_from_image -> face_detector.detect_faces)
+            cropped_face = ml_service.get_processed_face(img_cv)
 
-                # Rechazar si calidad es muy baja
+            # 3. Eliminar el archivo original TEMPORAL
+            if os.path.exists(temp_original_path):
+                os.remove(temp_original_path)
+                if temp_original_path in temp_files_to_delete:
+                    temp_files_to_delete.remove(temp_original_path)
+
+            # 🚨 CORRECCIÓN CLAVE: MANEJAR EL FALLO DE DETECCIÓN 🚨
+            if cropped_face is None:
+                print(f"❌ Rostro no detectado en: {original_filename}")
+                imagenes_rechazadas.append({"nombre": original_filename, "razon": "Rostro no detectado"})
+                continue  # <-- SALTA A LA SIGUIENTE IMAGEN
+
+            # 4. VERIFICACIÓN DE CALIDAD (Opcional, pero recomendado)
+            if MLConfig.USE_QUALITY_CHECK:
+                quality_metrics = ml_service.quality_checker.check_image_quality(cropped_face)
                 if not quality_metrics['is_acceptable']:
-                    print(f"❌ Imagen rechazada por baja calidad")
-                    os.remove(file_path)
+                    print(f"❌ Rostro rechazado por baja calidad: {quality_metrics['quality_level']}")
                     imagenes_rechazadas.append({
-                        "nombre": imagen.filename,
+                        "nombre": original_filename,
                         "razon": f"Calidad insuficiente ({quality_metrics['quality_level']})",
                         "score": quality_metrics['overall_score']
                     })
                     continue
 
-            # Intentar alinear rostro
-            aligned_path = None
-            if ml_service.alignment_available and MLConfig.USE_FACE_ALIGNMENT:
-                aligned = ml_service.face_aligner.align_face(img_cv)
-                if aligned is not None and MLConfig.SAVE_ALIGNED_IMAGES:
-                    aligned_path = file_path.replace(file_extension, f'_aligned{file_extension}')
-                    cv2.imwrite(aligned_path, aligned)
-                    print(f"✅ Rostro alineado guardado")
+            # 5. GUARDAR EL ROSTRO RECORTADO PERMANENTEMENTE
+            final_file_extension = ".png"
+            unique_filename = f"face_{nuevo_usuario.id}_{uuid.uuid4().hex}{final_file_extension}"
+            final_file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-            # Obtener dimensiones
-            height, width = img_cv.shape[:2]
+            cv2.imwrite(final_file_path, cropped_face)
+            print(f"✅ Rostro recortado guardado en: {final_file_path}")
 
-            # Crear registro en BD
+            # 6. PERSISTENCIA EN BD
+            height, width = cropped_face.shape[:2]
             imagen_facial = ImagenFacial(
                 usuario_id=nuevo_usuario.id,
-                nombre_archivo=imagen.filename,
-                ruta_archivo=file_path,
+                nombre_archivo=original_filename,
+                ruta_archivo=final_file_path,  # <-- RUTA AL ROSTRO RECORTADO
                 es_principal=(len(imagenes_guardadas) == 0),
-                formato=file_extension[1:],
-                tamano_bytes=os.path.getsize(file_path),
+                formato=final_file_extension[1:],
+                tamano_bytes=os.path.getsize(final_file_path),
                 ancho=width,
                 alto=height,
-                quality_score=quality_metrics.get('overall_score') if MLConfig.USE_QUALITY_CHECK else None,
-                quality_level=quality_metrics.get('quality_level') if MLConfig.USE_QUALITY_CHECK else None,
-                face_aligned=aligned is not None
+                quality_score=quality_metrics.get('overall_score') if MLConfig.USE_QUALITY_CHECK else 100.0,
+                quality_level=quality_metrics.get('quality_level') if MLConfig.USE_QUALITY_CHECK else "Excelente",
+                face_aligned=True
             )
-
             db.add(imagen_facial)
             imagenes_guardadas.append(imagen_facial)
 
-        # Verificar que al menos una imagen fue aceptada
         if len(imagenes_guardadas) == 0:
             db.rollback()
             raise HTTPException(
@@ -275,276 +249,162 @@ async def crear_usuario(
             )
 
         db.commit()
-        print(f"✅ {len(imagenes_guardadas)} imágenes guardadas, {len(imagenes_rechazadas)} rechazadas")
+        print(f"✅ {len(imagenes_guardadas)} rostros guardados, {len(imagenes_rechazadas)} rechazados")
 
-        # INICIALIZAR RESULTADO ML
+        # ----------------------------------------------------------------------
+        # PASO 1: EXTRAER CARACTERÍSTICAS (Ahora usa el preprocesador unificado)
+        # ----------------------------------------------------------------------
+
         ml_result = {
-            "ml_training_status": "not_attempted",
-            "ml_message": "Procesamiento ML no ejecutado",
-            "model_trained": False,
-            "characteristics_extracted": False,
-            "training_triggered": False,
+            "ml_training_status": "not_attempted", "ml_message": "Procesamiento ML no ejecutado",
+            "model_trained": False, "characteristics_extracted": False, "training_triggered": False,
             "characteristics_count": 0
         }
-
-        # PASO 1: EXTRAER CARACTERÍSTICAS BÁSICAS SIEMPRE
         caracteristicas_extraidas = 0
 
         try:
-            print(f"[CHAR] Extrayendo características para usuario {nuevo_usuario.id}")
-
-            for i, imagen_facial in enumerate(imagenes_guardadas):
+            for imagen_facial in imagenes_guardadas:
                 try:
-                    # Leer imagen
-                    img = cv2.imread(imagen_facial.ruta_archivo)
-                    if img is None:
-                        print(f"[WARNING] No se pudo leer imagen: {imagen_facial.ruta_archivo}")
-                        continue
+                    cropped_face_img = cv2.imread(imagen_facial.ruta_archivo)
+                    if cropped_face_img is None: continue
 
-                    # Actualizar dimensiones
-                    imagen_facial.alto = img.shape[0]
-                    imagen_facial.ancho = img.shape[1]
-
-                    print(f"[CHAR] Procesando imagen {imagen_facial.id}: {img.shape}")
-
-                    # EXTRAER CARACTERÍSTICAS BÁSICAS
                     eigenfaces_features = None
                     lbp_features = None
 
-                    # EIGENFACES BÁSICO (preparar para futuro PCA)
-                    try:
-                        processed_img = img.copy()
-                        if len(processed_img.shape) == 3:
-                            processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
+                    # EIGENFACES BÁSICO (Vector 10k)
+                    if ml_service.preprocessor:
+                        processed_img_eigen = ml_service.preprocessor.preprocess_for_ml(
+                            cropped_face_img.copy(), algorithm="eigenfaces"
+                        )
+                        eigenfaces_features = processed_img_eigen.flatten()
 
-                        processed_img = cv2.resize(processed_img, (100, 100))
-                        processed_img = cv2.equalizeHist(processed_img)
-                        processed_img = processed_img.astype(np.float64) / 255.0
+                    # LBP (Histograma)
+                    if LBP_AVAILABLE and ml_service.preprocessor:
+                        processed_img_lbp = ml_service.preprocessor.preprocess_for_ml(
+                            cropped_face_img.copy(), algorithm="lbp"
+                        )
+                        lbp_image = local_binary_pattern(processed_img_lbp, 16, 2, method='uniform')
+                        hist, _ = np.histogram(lbp_image.ravel(), bins=18, range=(0, 18), density=True)
+                        lbp_features = hist
 
-                        # Vector básico (imagen aplanada)
-                        eigenfaces_features = processed_img.flatten()
-                        print(f"[CHAR] Eigenfaces básico: {eigenfaces_features.shape}")
-
-                    except Exception as e:
-                        print(f"[WARNING] Error Eigenfaces básico: {e}")
-
-                    # LBP (solo si está disponible)
-                    if LBP_AVAILABLE:
-                        try:
-                            from skimage.feature import local_binary_pattern
-
-                            processed_img = img.copy()
-                            if len(processed_img.shape) == 3:
-                                processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
-
-                            processed_img = cv2.resize(processed_img, (100, 100))
-
-                            # Aplicar LBP
-                            lbp_image = local_binary_pattern(processed_img, 16, 2, method='uniform')
-
-                            # Crear histograma simple
-                            hist, _ = np.histogram(lbp_image.ravel(), bins=18, range=(0, 18), density=True)
-                            lbp_features = hist
-                            print(f"[CHAR] LBP extraído: {lbp_features.shape}")
-
-                        except Exception as e:
-                            print(f"[WARNING] Error LBP: {e}")
-                    else:
-                        print(f"[INFO] LBP no disponible - solo Eigenfaces básico")
-
-                    # GUARDAR EN BD
                     if eigenfaces_features is not None or lbp_features is not None:
                         caracteristicas = CaracteristicasFaciales(
                             usuario_id=nuevo_usuario.id,
                             imagen_id=imagen_facial.id,
                             eigenfaces_vector=eigenfaces_features.tolist() if eigenfaces_features is not None else None,
                             lbp_histogram=lbp_features.tolist() if lbp_features is not None else None,
-                            algoritmo_version="2.1_basic",
-                            calidad_deteccion=75
+                            algoritmo_version="2.1_processed",
+                            calidad_deteccion=imagen_facial.quality_score or 75
                         )
                         db.add(caracteristicas)
                         caracteristicas_extraidas += 1
-                        print(f"[CHAR] Características guardadas para imagen {imagen_facial.id}")
-                    else:
-                        print(f"[WARNING] No se pudieron extraer características para imagen {imagen_facial.id}")
 
                 except Exception as e:
-                    print(f"[ERROR] Error procesando imagen {imagen_facial.id}: {e}")
+                    print(f"[ERROR] Error procesando imagen {imagen_facial.id} para CHAR: {e}")
                     continue
-
-            # Commit de todo
             db.commit()
-
             if caracteristicas_extraidas > 0:
-                print(f"[SUCCESS] {caracteristicas_extraidas} características guardadas")
                 ml_result.update({
                     "characteristics_extracted": True,
                     "characteristics_count": caracteristicas_extraidas,
                     "ml_message": f"Características extraídas: {caracteristicas_extraidas}"
                 })
-
         except Exception as e:
-            print(f"[ERROR] Error general extrayendo características: {e}")
-            ml_result["ml_message"] = f"Error extrayendo características: {str(e)}"
+            ml_result["ml_message"] = f"Error general extrayendo características: {str(e)}"
 
-        # PASO 2: ENTRENAMIENTO AUTOMÁTICO REAL
+        # ----------------------------------------------------------------------
+        # PASO 2: ENTRENAMIENTO AUTOMÁTICO (Esta lógica está bien)
+        # ----------------------------------------------------------------------
+
         try:
-
             total_usuarios = db.query(Usuario).filter(Usuario.activo == True).count()
             usuarios_con_caracteristicas = db.query(CaracteristicasFaciales.usuario_id).distinct().count()
 
-            print(f"[TRAINING] Usuarios: {total_usuarios}, con características: {usuarios_con_caracteristicas}")
-            print(f"[TRAINING] Modelo entrenado actualmente: {ml_service.is_trained}")
-
-            # LÓGICA DE REENTRENAMIENTO:
-            # 1. Entrenar por primera vez cuando haya al menos 2 usuarios
-            # 2. Después, re-entrenar cada 2 usuarios nuevos
             should_train = False
             training_reason = ""
 
             if not ml_service.is_trained and usuarios_con_caracteristicas >= 2:
-                # Primera vez: entrenar con mínimo 2 usuarios
                 should_train = True
                 training_reason = "entrenamiento inicial"
-                print(f"[TRAINING] 🎓 Condición cumplida: ENTRENAMIENTO INICIAL")
             elif ml_service.is_trained:
-                # Modelo ya entrenado: verificar si debemos re-entrenar
-                # Obtener el número de usuarios del último entrenamiento
-                last_training_users = ml_service.last_training_users if hasattr(ml_service,
-                                                                                'last_training_users') else 0
+                last_training_users = ml_service.last_training_users
                 users_since_last_training = usuarios_con_caracteristicas - last_training_users
-
-                print(f"[TRAINING] Usuarios en último entrenamiento: {last_training_users}")
-                print(f"[TRAINING] Usuarios nuevos desde entonces: {users_since_last_training}")
-
                 if users_since_last_training >= 2:
                     should_train = True
                     training_reason = f"re-entrenamiento (cada 2 usuarios nuevos: {users_since_last_training})"
-                    print(f"[TRAINING] 🔄 Condición cumplida: RE-ENTRENAMIENTO CADA 2 USUARIOS")
                 else:
-                    print(f"[TRAINING] ⏳ Esperando más usuarios para re-entrenar ({users_since_last_training}/2)")
                     ml_result.update({
                         "training_triggered": False,
                         "ml_message": f"Características guardadas. Esperando {2 - users_since_last_training} usuario(s) más para re-entrenar",
-                        "users_since_last_training": users_since_last_training,
-                        "users_needed_for_retrain": 2 - users_since_last_training
                     })
             else:
-                print(
-                    f"[TRAINING] ⏳ Esperando más usuarios para entrenamiento inicial ({usuarios_con_caracteristicas}/2)")
                 ml_result.update({
                     "training_triggered": False,
                     "ml_message": f"Características guardadas. Esperando {2 - usuarios_con_caracteristicas} usuario(s) más para entrenar",
-                    "users_with_features": usuarios_con_caracteristicas,
-                    "users_needed": 2 - usuarios_con_caracteristicas
                 })
 
             if should_train:
                 print(f"[TRAINING] 🚀 INICIANDO {training_reason.upper()}...")
-
-                # Obtener todos los usuarios con imágenes válidas
                 usuarios_con_imagenes = db.query(Usuario).filter(Usuario.activo == True).all()
                 images_by_person = {}
-
                 for usuario in usuarios_con_imagenes:
                     imagenes_usuario = db.query(ImagenFacial).filter(
-                        ImagenFacial.usuario_id == usuario.id,
-                        ImagenFacial.activa == True
+                        ImagenFacial.usuario_id == usuario.id, ImagenFacial.activa == True
                     ).all()
-
                     user_images = []
                     for img_facial in imagenes_usuario:
                         if os.path.exists(img_facial.ruta_archivo):
                             img = cv2.imread(img_facial.ruta_archivo)
                             if img is not None:
                                 user_images.append(img)
-
                     if user_images:
                         images_by_person[usuario.id] = user_images
-                        print(f"[TRAINING] Usuario {usuario.id}: {len(user_images)} imágenes")
 
-                # EJECUTAR ENTRENAMIENTO SI HAY SUFICIENTES DATOS
                 if len(images_by_person) >= 2:
-                    print(f"[TRAINING] 🎓 Entrenando modelo con {len(images_by_person)} usuarios...")
-
                     try:
                         training_stats = ml_service.train_models(images_by_person)
-
-                        # GUARDAR EL NÚMERO DE USUARIOS EN ESTE ENTRENAMIENTO
                         ml_service.last_training_users = len(images_by_person)
-
-                        print(f"[TRAINING] ✅ {training_reason.upper()} COMPLETADO!")
-                        print(f"[TRAINING] Stats: {training_stats}")
-
                         ml_result.update({
-                            "model_trained": True,
-                            "training_triggered": True,
-                            "training_reason": training_reason,
-                            "ml_training_status": "completed",
-                            "training_stats": training_stats,
-                            "ml_message": f"🎓 Modelo {'entrenado' if 'inicial' in training_reason else 're-entrenado'} con {len(images_by_person)} usuarios",
-                            "users_in_training": len(images_by_person),
-                            "total_training_images": sum(len(imgs) for imgs in images_by_person.values())
+                            "model_trained": True, "training_triggered": True, "training_reason": training_reason,
+                            "ml_training_status": "completed", "training_stats": training_stats,
+                            "ml_message": f"🎓 Modelo re-entrenado con {len(images_by_person)} usuarios",
                         })
-
-                        # VERIFICAR QUE EL MODELO ESTÁ CARGADO
-                        try:
-                            ml_service.load_models()
-                            if ml_service.is_trained:
-                                print(f"[TRAINING] ✅ Modelo verificado y cargado correctamente")
-                                ml_result["model_verified"] = True
-                            else:
-                                print(f"[TRAINING] ⚠️ Modelo entrenado pero no se puede cargar")
-                                ml_result["model_verified"] = False
-                        except Exception as e:
-                            print(f"[TRAINING] ⚠️ Error verificando modelo: {e}")
-                            ml_result["model_verified"] = False
-
+                        ml_service.load_models()
+                        ml_result["model_verified"] = ml_service.is_trained
                     except Exception as e:
-                        print(f"[TRAINING] ❌ ERROR EN ENTRENAMIENTO: {e}")
                         ml_result.update({
-                            "training_triggered": True,
-                            "ml_training_status": "failed",
-                            "training_error": str(e),
+                            "training_triggered": True, "ml_training_status": "failed", "training_error": str(e),
                             "ml_message": f"Error en {training_reason}: {str(e)}"
                         })
                 else:
-                    print(f"[TRAINING] ❌ Insuficientes usuarios con imágenes válidas: {len(images_by_person)}")
-                    ml_result.update({
-                        "training_triggered": False,
-                        "ml_message": f"Insuficientes usuarios con imágenes válidas: {len(images_by_person)}/2"
-                    })
-
+                    ml_result.update({"training_triggered": False,
+                                      "ml_message": f"Insuficientes usuarios con rostros válidos: {len(images_by_person)}/2"})
         except Exception as e:
-            print(f"[TRAINING] ❌ ERROR EN VERIFICACIÓN DE ENTRENAMIENTO: {e}")
-            ml_result.update({
-                "ml_message": f"Error en verificación de entrenamiento: {str(e)}"
-            })
+            ml_result.update({"ml_message": f"Error en verificación de entrenamiento: {str(e)}"})
 
-        # Preparar respuesta del usuario (SIEMPRE exitosa)
+        # Preparar respuesta del usuario
         usuario_creado = {
-            "id": nuevo_usuario.id,
-            "nombre": nuevo_usuario.nombre,
-            "apellido": nuevo_usuario.apellido,
-            "email": nuevo_usuario.email,
-            "id_estudiante": nuevo_usuario.id_estudiante,
-            "requisitoriado": nuevo_usuario.requisitoriado,
-            "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
-            "total_imagenes": len(imagenes_guardadas),
-            "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
-            **ml_result  # Incluir resultado ML completo
+            "id": nuevo_usuario.id, "nombre": nuevo_usuario.nombre, "apellido": nuevo_usuario.apellido,
+            "email": nuevo_usuario.email, "id_estudiante": nuevo_usuario.id_estudiante,
+            "requisitoriado": nuevo_usuario.requisitoriado, "tipo_requisitoria": nuevo_usuario.tipo_requisitoria,
+            "total_imagenes": len(imagenes_guardadas), "fecha_registro": nuevo_usuario.fecha_registro.isoformat(),
+            **ml_result
         }
 
         return ResponseWithData(
             success=True,
-            message=f"Usuario creado exitosamente con {len(imagenes_guardadas)} imágenes",
+            message=f"Usuario creado exitosamente con {len(imagenes_guardadas)} rostros persistidos",
             data=usuario_creado
         )
 
     except HTTPException:
+        for f in temp_files_to_delete:
+            if os.path.exists(f): os.remove(f)
         raise
     except Exception as e:
         db.rollback()
+        for f in temp_files_to_delete:
+            if os.path.exists(f): os.remove(f)
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 

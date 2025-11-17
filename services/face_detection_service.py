@@ -22,31 +22,57 @@ class FaceDetectionService:
             cv2.data.haarcascades + 'haarcascade_profileface.xml'
         )
 
-        # Parámetros de detección
-        self.scale_factor = 1.1
-        self.min_neighbors = 5
-        self.min_size = (30, 30)
-        self.max_size = (300, 300)
+        # --- PARÁMETROS CORREGIDOS (MÁS SEGUROS) ---
+        self.scale_factor = 1.1  # Volvemos a 1.1, es más lento pero más exhaustivo
+        self.min_neighbors = 5  # 5 es un estándar balanceado
+
+        # CRÍTICO: Un min_size pequeño para la imagen re-escalada
+        # (40, 40) en una imagen de 640px de ancho es un buen balance
+        # para ignorar ruido pero capturar rostros.
+        self.min_size = (40, 40)
+
+        # Sin límite máximo
+        self.max_size = (0, 0)
+
+        # --- NUEVO: Ancho estándar para procesamiento ---
+        self.processing_width = 640.0  # Usar float para división precisa
 
     def detect_faces(self, image: np.ndarray, detect_profile: bool = True) -> List[Tuple[int, int, int, int]]:
         """
-        Detecta rostros en una imagen
-
-        Args:
-            image: Imagen en formato numpy array
-            detect_profile: Si detectar también rostros de perfil
-
-        Returns:
-            Lista de tuplas (x, y, w, h) con las coordenadas de los rostros detectados
+        Detecta rostros en una imagen, usando una versión re-escalada para
+        mayor velocidad y re-escala las coordenadas a la imagen original.
         """
-        # Convertir a escala de grises si es necesario
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image.copy()
 
-        # Detectar rostros frontales
-        faces = self.face_cascade.detectMultiScale(
+        # --- INICIO DE LA OPTIMIZACIÓN ---
+
+        # 1. Calcular ratio de re-escalado
+        original_height, original_width = image.shape[:2]
+
+        # Si la imagen es más pequeña o igual al ancho de procesamiento, no re-escalamos
+        if original_width <= self.processing_width:
+            scale_ratio = 1.0
+            processing_image = image.copy()
+        else:
+            scale_ratio = original_width / self.processing_width
+            # Calcular nueva altura manteniendo la proporción
+            processing_height = int(original_height / scale_ratio)
+
+            # Redimensionar la imagen para la detección
+            processing_image = cv2.resize(
+                image, (int(self.processing_width), processing_height),
+                interpolation=cv2.INTER_AREA  # INTER_AREA es bueno para reducir
+            )
+
+        # --- FIN DE LA OPTIMIZACIÓN ---
+
+        # Convertir la imagen PEQUEÑA a escala de grises
+        if len(processing_image.shape) == 3:
+            gray = cv2.cvtColor(processing_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = processing_image
+
+        # Detectar rostros frontales en la imagen PEQUEÑA
+        faces_small = self.face_cascade.detectMultiScale(
             gray,
             scaleFactor=self.scale_factor,
             minNeighbors=self.min_neighbors,
@@ -55,11 +81,19 @@ class FaceDetectionService:
             flags=cv2.CASCADE_SCALE_IMAGE
         )
 
-        face_list = list(faces)
+        # --- NUEVO: Re-escalar coordenadas al tamaño original ---
+        face_list = []
+        for (x, y, w, h) in faces_small:
+            face_list.append((
+                int(x * scale_ratio),
+                int(y * scale_ratio),
+                int(w * scale_ratio),
+                int(h * scale_ratio)
+            ))
 
-        # Detectar rostros de perfil si está habilitado
+        # Detectar rostros de perfil si está habilitado (en la imagen PEQUEÑA)
         if detect_profile:
-            profile_faces = self.profile_cascade.detectMultiScale(
+            profile_faces_small = self.profile_cascade.detectMultiScale(
                 gray,
                 scaleFactor=self.scale_factor,
                 minNeighbors=self.min_neighbors,
@@ -68,11 +102,21 @@ class FaceDetectionService:
                 flags=cv2.CASCADE_SCALE_IMAGE
             )
 
-            # Añadir rostros de perfil que no se solapen con frontales
-            for (px, py, pw, ph) in profile_faces:
+            # --- NUEVO: Re-escalar coordenadas de perfil ---
+            profile_faces_scaled = []
+            for (px, py, pw, ph) in profile_faces_small:
+                profile_faces_scaled.append((
+                    int(px * scale_ratio),
+                    int(py * scale_ratio),
+                    int(pw * scale_ratio),
+                    int(ph * scale_ratio)
+                ))
+
+            # Añadir rostros de perfil (YA RE-ESCALADOS)
+            for (px, py, pw, ph) in profile_faces_scaled:
                 is_overlap = False
-                for (fx, fy, fw, fh) in face_list:
-                    # Verificar solapamiento
+                for (fx, fy, fw, fh) in face_list:  # face_list ya está re-escalada
+                    # Verificar solapamiento (esta función usa coordenadas, no depende del tamaño)
                     if self._calculate_overlap((px, py, pw, ph), (fx, fy, fw, fh)) > 0.3:
                         is_overlap = True
                         break
@@ -80,20 +124,15 @@ class FaceDetectionService:
                 if not is_overlap:
                     face_list.append((px, py, pw, ph))
 
+        # Retorna las coordenadas ajustadas al tamaño de la imagen ORIGINAL
         return face_list
 
     def extract_face_roi(self, image: np.ndarray, face_coords: Tuple[int, int, int, int],
                          margin: float = 0.2) -> np.ndarray:
         """
-        Extrae la región de interés (ROI) de un rostro
-
-        Args:
-            image: Imagen original
-            face_coords: Coordenadas del rostro (x, y, w, h)
-            margin: Margen adicional alrededor del rostro (porcentaje)
-
-        Returns:
-            Imagen recortada del rostro
+        Extrae la región de interés (ROI) de un rostro.
+        (Esta función no necesita cambios, ya que ahora recibe las coordenadas
+        correctas re-escaladas de la imagen original).
         """
         x, y, w, h = face_coords
 
@@ -107,20 +146,15 @@ class FaceDetectionService:
         x2 = min(image.shape[1], x + w + margin_x)
         y2 = min(image.shape[0], y + h + margin_y)
 
-        # Extraer ROI
+        # Extraer ROI (de la imagen ORIGINAL de alta calidad)
         face_roi = image[y1:y2, x1:x2]
 
         return face_roi
 
     def get_largest_face(self, faces: List[Tuple[int, int, int, int]]) -> Optional[Tuple[int, int, int, int]]:
         """
-        Obtiene el rostro más grande de una lista de rostros detectados
-
-        Args:
-            faces: Lista de rostros detectados
-
-        Returns:
-            Coordenadas del rostro más grande o None si la lista está vacía
+        Obtiene el rostro más grande de una lista de rostros detectados.
+        (Esta función no necesita cambios).
         """
         if not faces:
             return None
@@ -195,123 +229,67 @@ class FaceDetectionService:
         """
         x1, y1, w1, h1 = face1
         x2, y2, w2, h2 = face2
-
-        # Coordenadas de intersección
         xi1 = max(x1, x2)
         yi1 = max(y1, y2)
         xi2 = min(x1 + w1, x2 + w2)
         yi2 = min(y1 + h1, y2 + h2)
-
         if xi2 <= xi1 or yi2 <= yi1:
             return 0.0
-
-        # Área de intersección
         intersection_area = (xi2 - xi1) * (yi2 - yi1)
-
-        # Área de unión
         area1 = w1 * h1
         area2 = w2 * h2
         union_area = area1 + area2 - intersection_area
-
-        # IoU (Intersection over Union)
         return intersection_area / union_area if union_area > 0 else 0.0
 
     def _calculate_face_quality(self, face_roi: np.ndarray) -> float:
         """
         Calcula una puntuación de calidad para un rostro
-
-        Args:
-            face_roi: Región de interés del rostro
-
-        Returns:
-            Puntuación de calidad (0-100)
         """
         if face_roi.size == 0:
             return 0.0
-
-        # Convertir a escala de grises si es necesario
         if len(face_roi.shape) == 3:
             gray_face = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
         else:
             gray_face = face_roi
-
-        # Factores de calidad
         quality_scores = []
-
-        # 1. Tamaño del rostro (rostros más grandes = mejor calidad)
         size_score = min(100, (gray_face.shape[0] * gray_face.shape[1]) / 100)
         quality_scores.append(size_score)
-
-        # 2. Nitidez (usando varianza de Laplaciano)
         laplacian_var = cv2.Laplacian(gray_face, cv2.CV_64F).var()
         sharpness_score = min(100, laplacian_var / 10)
         quality_scores.append(sharpness_score)
-
-        # 3. Contraste
         contrast = gray_face.std()
         contrast_score = min(100, contrast * 2)
         quality_scores.append(contrast_score)
-
-        # 4. Brillo (evitar imágenes muy oscuras o muy claras)
         brightness = gray_face.mean()
         brightness_score = 100 - abs(128 - brightness) * 2
         brightness_score = max(0, brightness_score)
         quality_scores.append(brightness_score)
-
-        # Puntuación final (promedio ponderado)
-        weights = [0.2, 0.4, 0.2, 0.2]  # Más peso a la nitidez
+        weights = [0.2, 0.4, 0.2, 0.2]
         final_score = sum(score * weight for score, weight in zip(quality_scores, weights))
-
         return max(0, min(100, final_score))
 
     def enhance_face_image(self, face_roi: np.ndarray) -> np.ndarray:
         """
         Mejora la calidad de la imagen del rostro
-
-        Args:
-            face_roi: Región de interés del rostro
-
-        Returns:
-            Imagen del rostro mejorada
         """
         enhanced = face_roi.copy()
-
-        # Convertir a escala de grises si es necesario
         if len(enhanced.shape) == 3:
             enhanced = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
-
-        # Aplicar filtro de reducción de ruido
         enhanced = cv2.medianBlur(enhanced, 3)
-
-        # Ecualización adaptiva de histograma
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(enhanced)
-
-        # Aplicar filtro de nitidez
-        kernel = np.array([[-1, -1, -1],
-                           [-1, 9, -1],
-                           [-1, -1, -1]])
+        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
         enhanced = cv2.filter2D(enhanced, -1, kernel)
-
         return enhanced
 
     def batch_detect_faces(self, images: List[np.ndarray]) -> List[List[Tuple[int, int, int, int]]]:
         """
         Detecta rostros en un lote de imágenes
-
-        Args:
-            images: Lista de imágenes
-
-        Returns:
-            Lista de listas con rostros detectados para cada imagen
         """
         all_faces = []
-
         for i, image in enumerate(images):
-            faces = self.detect_faces(image)
+            faces = self.detect_faces(image) # Esta función ahora es rápida
             all_faces.append(faces)
-
             if (i + 1) % 10 == 0:
                 print(f"Procesadas {i + 1}/{len(images)} imágenes para detección")
-
         return all_faces

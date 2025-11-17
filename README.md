@@ -45,6 +45,7 @@ Sistema de reconocimiento facial de alta precisión implementado completamente d
 - 🔍 **Verificación de calidad** - Análisis automático de calidad de imágenes
 - 🎭 **Alineación facial** - Normalización de pose usando MediaPipe
 - 💡 **Preprocesamiento avanzado** - Filtro homomórfico para normalización de iluminación
+- 🏋️‍♂️ **Data Augmentation** - Generación automática de variaciones de rostros para mejorar el entrenamiento
 
 ---
 

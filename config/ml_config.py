@@ -16,8 +16,8 @@ class MLConfig:
 
     # ============ SISTEMA HÍBRIDO ============
     FUSION_METHOD = 'adaptive'  # adaptive, weighted, voting
-    EIGENFACES_WEIGHT = 0.6  # Peso para Eigenfaces
-    LBP_WEIGHT = 0.4  # Peso para LBP
+    EIGENFACES_WEIGHT = 0.4  # Peso para Eigenfaces
+    LBP_WEIGHT = 0.6  # Peso para LBP
 
     # ============ CALIDAD DE IMAGEN ============
     MIN_QUALITY_SCORE = 40  # Score mínimo aceptable
@@ -30,7 +30,7 @@ class MLConfig:
     # ============ PREPROCESAMIENTO ============
     USE_ADVANCED_ILLUMINATION = True  # Normalización avanzada de iluminación
     TARGET_IMAGE_SIZE = (100, 100)  # Tamaño objetivo
-
+    FACE_MARGIN_PERCENT = 0.1
     # ============ UMBRALES GENERALES ============
     CONFIDENCE_THRESHOLD = 70.0  # Umbral global de confianza
     CONSENSUS_BONUS = 1.1  # Bonus cuando algoritmos coinciden

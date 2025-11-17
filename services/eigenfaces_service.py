@@ -89,6 +89,36 @@ class EigenfacesService:
 
         return cleaned
 
+    def transform_image_vector(self, image_vector: np.ndarray) -> np.ndarray:
+        """
+        Toma un vector de imagen aplanado (ej. 10000) y lo proyecta
+        al espacio de Eigenfaces (ej. 150) usando el PCA entrenado.
+
+        Args:
+            image_vector: Vector plano de la imagen (1D array).
+
+        Returns:
+            El vector de características reducido (embedding).
+        """
+        if not self.is_trained or self.pca is None:
+            raise ValueError("Error de PCA: El modelo Eigenfaces no ha sido entrenado. No se puede transformar.")
+
+        if image_vector.shape[0] != self.mean_face.shape[0]:
+            raise ValueError(
+                f"ERROR DIMENSIONES: El vector de entrada ({image_vector.shape[0]}) no coincide "
+                f"con la dimensión del modelo ({self.mean_face.shape[0]})."
+            )
+
+        # 1. Centrar la imagen restando la cara promedio
+        centered_vector = image_vector - self.mean_face
+
+        # 2. Proyectar en el espacio PCA (transform)
+        # Reshape (1, -1) es necesario porque transform espera un lote de imágenes
+        embedding = self.pca.transform(centered_vector.reshape(1, -1))
+
+        # 3. Retornar el vector 1D
+        return embedding.flatten()
+
     def extract_features(self, image: np.ndarray) -> np.ndarray:
         """
         ✅ CORREGIDO: Extrae características con limpieza de valores infinitos
